@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: online-sheet
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: TURSO_DATABASE_URL
+        sync: false          # paste your Turso DB URL here in Render dashboard
+      - key: TURSO_AUTH_TOKEN
+        sync: false          # paste your Turso auth token here in Render dashboard
+      - key: PYTHON_VERSION
+        value: "3.11.9"
