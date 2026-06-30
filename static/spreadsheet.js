@@ -355,11 +355,6 @@ const Spreadsheet = (() => {
 
                 // Double left-click → edit (all columns)
                 attachEditDblClick(td, col, entry);
-
-                // Status column: single click + keystroke shortcut
-                if (col.type === 'status') {
-                    attachStatusKeyShortcut(td, col, entry);
-                }
             }
 
             tr.appendChild(td);
@@ -372,8 +367,7 @@ const Spreadsheet = (() => {
         td.addEventListener('dblclick', (e) => onCellDblClick(e, td, col, entry));
     }
 
-    /* ── Status keystroke shortcuts ─────────────────────────────────────
-       Single-click selects cell → press p/a/d/c/b to set status instantly.
+    /* ── Status keystroke map ───────────────────────────────────────────
        p = Paid, a = Auto Debit, d = Due, c = Daily Collection, b = Branch Paid
     ───────────────────────────────────────────────────────────────────── */
     const STATUS_KEYS = {
@@ -383,55 +377,6 @@ const Spreadsheet = (() => {
         'c': 'dailycollection',
         'b': 'branchpaid',
     };
-
-    let _selectedStatusCell = null;
-
-    function attachStatusKeyShortcut(td, col, entry) {
-        td.setAttribute('tabindex', '0');
-        td.style.cursor = 'pointer';
-
-        td.addEventListener('click', (e) => {
-            e.stopPropagation();
-            // Deselect previous
-            if (_selectedStatusCell && _selectedStatusCell !== td) {
-                _selectedStatusCell.classList.remove('status-selected');
-            }
-            _selectedStatusCell = td;
-            td.classList.add('status-selected');
-            td.focus();
-        });
-
-        td.addEventListener('keydown', (e) => {
-            const key = e.key.toLowerCase();
-            if (key in STATUS_KEYS) {
-                e.preventDefault();
-                const newVal = STATUS_KEYS[key];
-                const oldVal = entry[col.key] || '';
-                if (newVal !== oldVal) {
-                    entry[col.key] = newVal;
-                    saveCell(td, entry.id, col.key, newVal);
-                }
-                // Update display
-                restoreCellDisplay(td, col, entry, newVal);
-                addStatusClass(td, newVal);
-                // Re-attach shortcut since restoreCellDisplay rebuilds the td
-                attachStatusKeyShortcut(td, col, entry);
-                td.classList.add('status-selected');
-                td.focus();
-            } else if (key === 'escape') {
-                td.classList.remove('status-selected');
-                td.blur();
-                _selectedStatusCell = null;
-            }
-        });
-
-        td.addEventListener('blur', () => {
-            // Small delay so click on another status cell works
-            setTimeout(() => {
-                if (_selectedStatusCell !== td) td.classList.remove('status-selected');
-            }, 100);
-        });
-    }
 
     function addStatusClass(td, value) {
         td.classList.remove('status-due', 'status-paid', 'status-autodebit', 'status-dailycollection', 'status-branchpaid');
@@ -448,7 +393,7 @@ const Spreadsheet = (() => {
         td.innerHTML = '';
         currentEditCell = td;
 
-        if (col.type === 'status') createStatusDropdown(td, entry[col.key] || '', entry, col);
+        if (col.type === 'status') createStatusKeystrokeInput(td, entry[col.key] || '', entry, col);
         else createTextInput(td, entry[col.key] || '', entry, col);
     }
 
@@ -485,26 +430,41 @@ const Spreadsheet = (() => {
         td.appendChild(input); input.focus(); input.select();
     }
 
-    function createStatusDropdown(td, value, entry, col) {
-        const select = document.createElement('select');
-        select.className = 'cell-input';
-        STATUS_OPTIONS.forEach(opt => {
-            const o = document.createElement('option');
-            o.value = opt; o.textContent = STATUS_LABELS[opt] || opt;
-            if (opt === value) o.selected = true;
-            select.appendChild(o);
+    function createStatusKeystrokeInput(td, value, entry, col) {
+        // Show current status text inside the marching-ants cell
+        const label = document.createElement('span');
+        label.className = 'cell-content';
+        label.textContent = STATUS_LABELS[value] || value || 'Due';
+        td.appendChild(label);
+
+        // Hidden input to capture keystrokes
+        const trap = document.createElement('input');
+        trap.style.cssText = 'position:absolute;opacity:0;width:0;height:0;pointer-events:none;';
+        td.appendChild(trap);
+        trap.focus();
+
+        trap.addEventListener('keydown', (e) => {
+            const key = e.key.toLowerCase();
+            if (key in STATUS_KEYS) {
+                e.preventDefault();
+                const newVal = STATUS_KEYS[key];
+                if (newVal !== value) {
+                    entry[col.key] = newVal;
+                    saveCell(td, entry.id, col.key, newVal);
+                }
+                finishEdit(td);
+                restoreCellDisplay(td, col, entry, newVal);
+                addStatusClass(td, newVal);
+            } else if (key === 'escape') {
+                finishEdit(td);
+                restoreCellDisplay(td, col, entry, value);
+            }
         });
-        select.addEventListener('blur', () => {
-            const nv = select.value; finishEdit(td);
-            if (nv !== value) { entry[col.key] = nv; saveCell(td, entry.id, col.key, nv); }
-            restoreCellDisplay(td, col, entry, nv); addStatusClass(td, nv);
+
+        trap.addEventListener('blur', () => {
+            finishEdit(td);
+            restoreCellDisplay(td, col, entry, value);
         });
-        select.addEventListener('change', () => select.blur());
-        select.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') { select.value = value; select.blur(); }
-            else if (e.key === 'Tab') { e.preventDefault(); select.blur(); moveToNextEditable(td, col, entry, e.shiftKey); }
-        });
-        td.appendChild(select); select.focus();
     }
 
     function finishEdit(td) { td.classList.remove('editing'); if (currentEditCell === td) currentEditCell = null; }
