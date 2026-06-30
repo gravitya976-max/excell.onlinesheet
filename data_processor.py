@@ -197,11 +197,13 @@ SPECIAL_STATUSES = {"autodebit", "dailycollection", "branchpaid"}
 
 
 def normalize_status(val):
-    """Normalize status. Returns 'autodebit'/'branchpaid'/'dailycollection' or None."""
+    """Normalize status. Returns known status string or None for empty/unknown."""
     if not val or str(val).strip() == "":
         return None
     cleaned = re.sub(r"[^a-z ]", "", str(val).lower().strip()).strip()
     nospace = cleaned.replace(" ", "")
+    if not nospace or nospace in ("none", "nan", "null"):
+        return None
     if nospace in SPECIAL_STATUSES:
         return nospace
     if "autodebit" in nospace or "auto" in nospace:
@@ -210,15 +212,19 @@ def normalize_status(val):
         return "branchpaid"
     if "dailycollection" in nospace or "daily" in nospace:
         return "dailycollection"
+    if nospace == "paid":
+        return "paid"
+    if nospace == "due":
+        return None  # due = default, same as empty
     return cleaned if cleaned else None
 
 
 def status_for_list(status_str):
-    """Status for monthly list: keep special statuses, blank out paid/due."""
+    """Status for monthly list: only 'paid' resets to due (empty), all others stay as-is."""
     norm = normalize_status(status_str)
-    if norm in SPECIAL_STATUSES:
-        return norm
-    return ""
+    if norm == "paid":
+        return ""
+    return norm or ""
 
 
 # ── Due month calculation ──────────────────────────────────────────────────────

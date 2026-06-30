@@ -13,6 +13,12 @@ const App = (() => {
         activeTab: 'list',
     };
 
+    // ── Client-side list cache for instant month switching ─────────
+    const _listCache = {};  // key: 'year/month' → { entries, list }
+    function cacheKey(y, m) { return `${y}/${m}`; }
+    function getCached(y, m) { return _listCache[cacheKey(y, m)] || null; }
+    function setCache(y, m, data) { _listCache[cacheKey(y, m)] = data; }
+
     const MONTH_NAMES = [
         '', 'January', 'February', 'March', 'April', 'May', 'June',
         'July', 'August', 'September', 'October', 'November', 'December'
@@ -64,12 +70,12 @@ const App = (() => {
     function prevMonth() {
         state.month--;
         if (state.month < 1) { state.month = 12; state.year--; }
-        updateMonthLabel(); loadList();
+        updateMonthLabel(); loadListFast();
     }
     function nextMonth() {
         state.month++;
         if (state.month > 12) { state.month = 1; state.year++; }
-        updateMonthLabel(); loadList();
+        updateMonthLabel(); loadListFast();
     }
 
     // ── Tabs ──────────────────────────────────────────────────────────
@@ -82,7 +88,7 @@ const App = (() => {
             $('#month-controls').classList.remove('hidden');
             $('#master-info').classList.add('hidden');
             $('#btn-generate').classList.remove('hidden');
-            loadList();
+            loadListFast();
         } else {
             $('#month-controls').classList.add('hidden');
             $('#master-info').classList.remove('hidden');
@@ -92,9 +98,28 @@ const App = (() => {
     }
 
     // ── Load monthly list ─────────────────────────────────────────────
-    async function loadList() {
+    function loadListFast() {
+        // Show cached data instantly, then refresh in background
+        const cached = getCached(state.year, state.month);
+        if (cached) {
+            state.entries = cached.entries || [];
+            state._allEntries = [...state.entries];
+            state.listMeta = cached.list;
+            renderList();
+            applyFilter($('#search-input').value);
+        }
+        // Always fetch fresh data (silently updates if changed)
+        loadList(!cached);  // show skeleton only if no cache
+    }
+
+    async function loadList(showSkeleton = true) {
         try {
+            if (showSkeleton) {
+                $('#info-count').textContent = 'Loading...';
+            }
             const data = await api('GET', `/api/list/${state.year}/${state.month}`);
+            // Cache the result
+            setCache(state.year, state.month, data);
             state.entries = data.entries || [];
             state._allEntries = [...state.entries];
             state.listMeta = data.list;
@@ -146,6 +171,8 @@ const App = (() => {
         try {
             const data = await api('POST', `/api/generate?year=${state.year}&month=${state.month}`);
             toast(`List generated: ${data.filtered_count} policies due`, 'success');
+            // Invalidate cache for this month and reload
+            delete _listCache[cacheKey(state.year, state.month)];
             await loadList();
         } catch (e) { toast(`Generate failed: ${e.message}`, 'error'); }
         finally { hideLoading(); }
@@ -158,6 +185,8 @@ const App = (() => {
         syncEl.className = 'sync-indicator syncing';
         try {
             await api('PUT', `/api/entry/${entryId}`, { [field]: value });
+            // Invalidate cache since data changed
+            delete _listCache[cacheKey(state.year, state.month)];
             syncEl.textContent = '✓ Saved';
             syncEl.className = 'sync-indicator synced';
             setTimeout(() => { syncEl.textContent = ''; syncEl.className = 'sync-indicator'; }, 3000);
