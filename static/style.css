@@ -134,6 +134,11 @@ td.col-name { text-align: left; }
 td.col-name .cell-content { justify-content: flex-start; text-align: left; }
 td.col-name.editing .cell-input { text-align: left; }
 
+/* ── Extra row input: fills entire cell, no visible border (like Excel) */
+.extra-row td .cell-input { display: block; width: 100%; height: 100%; min-height: 28px; padding: 6px 10px; background: var(--bg-cell-edit); border: none; outline: none; color: var(--text-primary); font-family: var(--font-mono); font-size: 12.5px; text-align: center; box-sizing: border-box; }
+.extra-row td.col-name .cell-input { text-align: left; }
+.extra-row td:has(.cell-input) { outline: 2px solid var(--accent) !important; outline-offset: -2px; background: var(--bg-cell-edit) !important; z-index: 6; }
+
 /* ── Column resize handle ──────────────────────────────────────────── */
 .col-resize-handle { position: absolute; top: 0; right: -2px; width: 5px; height: 100%; cursor: col-resize; z-index: 20; background: transparent; }
 .col-resize-handle:hover, .col-resize-handle:active { background: var(--accent); opacity: 0.5; }

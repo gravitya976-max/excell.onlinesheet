@@ -316,6 +316,12 @@ const App = (() => {
         applyFilter('');
     }
 
+    // ── Reload active tab (called after new entry saved from empty row) ──
+    function reloadActive() {
+        if (state.activeTab === 'master') loadMasterData();
+        else loadList();
+    }
+
     // ── Init ──────────────────────────────────────────────────────────
     function init() {
         updateMonthLabel();
@@ -365,5 +371,5 @@ const App = (() => {
     }
 
     document.addEventListener('DOMContentLoaded', init);
-    return { state, updateEntry, toast, api };
+    return { state, updateEntry, toast, api, reloadActive };
 })();

@@ -27,7 +27,7 @@ const Spreadsheet = (() => {
         COLUMNS.push({ key: `note${i}`, label: `Note ${i}`, editable: true, type: 'text' });
     }
 
-    const EXTRA_ROWS = 30;
+    const EXTRA_ROWS = 10;
     const STATUS_OPTIONS = ['', 'paid', 'autodebit', 'dailycollection', 'branchpaid'];
     const STATUS_LABELS = { '': 'Due', 'paid': 'Paid', 'autodebit': 'Auto Debit', 'dailycollection': 'Daily Collection', 'branchpaid': 'Branch Paid' };
 
@@ -181,6 +181,39 @@ const Spreadsheet = (() => {
         if (typeof App !== 'undefined') App.toast(`Copied: ${pno}`, 'success', 1500);
     }
 
+    // ── Extra (blank) editable rows — always 30 after real data ──────
+    const extraRowData = {}; // idx → { field: value }
+
+    function commitExtraRow(idx) {
+        const data = extraRowData[idx] || {};
+        const pno = (data.policyno || '').trim();
+        if (!pno) return; // nothing to save yet
+
+        const activeTab = App.state.activeTab;
+        let url;
+        if (activeTab === 'master') {
+            url = '/api/master/new';
+        } else {
+            const s = App.state;
+            url = `/api/list/${s.year}/${s.month}/new`;
+        }
+
+        App.api('POST', url, { ...data, policyno: pno })
+            .then(res => {
+                const label = activeTab === 'master' ? 'master data' : 'monthly list';
+                let msg = `✓ Policy ${pno} saved to ${label}`;
+                if (res.added_to_master) msg += ' + master data';
+                App.toast(msg, 'success', 4000);
+                // Reload the active tab to reflect new entry + fresh 30 empty rows
+                if (activeTab === 'master') {
+                    App.reloadActive();
+                } else {
+                    App.reloadActive();
+                }
+            })
+            .catch(err => App.toast(`Save failed: ${err.message}`, 'error'));
+    }
+
     /* ════════════════════════════════════════════════════════════════════
        DOUBLE LEFT-CLICK → edit cell
        Uses the native 'dblclick' event — no timers needed
@@ -210,27 +243,67 @@ const Spreadsheet = (() => {
 
         for (let i = 0; i < EXTRA_ROWS; i++) {
             const rowIdx = entries.length + i;
+            const extraIdx = i;
             const tr = document.createElement('tr');
             tr.className = 'extra-row';
             if (rowHeights[rowIdx]) tr.style.height = rowHeights[rowIdx] + 'px';
+
             COLUMNS.forEach(col => {
                 const td = document.createElement('td');
                 td.className = `col-${col.key}`;
                 if (rowHeights[rowIdx]) td.style.height = rowHeights[rowIdx] + 'px';
+
                 if (col.type === 'index') {
                     td.classList.add('locked');
                     td.style.position = 'relative';
                     const span = document.createElement('span');
-                    span.className = 'cell-content'; span.textContent = entries.length + i + 1;
+                    span.className = 'cell-content';
+                    span.textContent = entries.length + i + 1;
                     td.appendChild(span);
                     const rh = document.createElement('div');
                     rh.className = 'row-resize-handle';
                     rh.addEventListener('mousedown', (e) => startRowResize(e, rowIdx, tr));
                     td.appendChild(rh);
-                } else {
+                } else if (col.type === 'status') {
                     const span = document.createElement('span');
                     span.className = 'cell-content';
                     td.appendChild(span);
+                } else {
+                    const span = document.createElement('span');
+                    span.className = 'cell-content';
+                    span.textContent = (extraRowData[extraIdx] || {})[col.key] || '';
+                    td.appendChild(span);
+
+                    td.addEventListener('dblclick', () => {
+                        if (td.querySelector('input')) return;
+                        td.innerHTML = '';
+                        td.style.position = 'relative';
+                        const input = document.createElement('input');
+                        input.type = 'text';
+                        input.className = 'cell-input';
+                        input.style.position = 'absolute';
+                        input.style.inset = '0';
+                        input.style.width = '100%';
+                        input.style.height = '100%';
+                        input.value = (extraRowData[extraIdx] || {})[col.key] || '';
+                        input.addEventListener('blur', () => {
+                            const val = input.value.trim();
+                            if (!extraRowData[extraIdx]) extraRowData[extraIdx] = {};
+                            extraRowData[extraIdx][col.key] = val;
+                            td.innerHTML = '';
+                            const s2 = document.createElement('span');
+                            s2.className = 'cell-content';
+                            s2.textContent = val;
+                            td.appendChild(s2);
+                            if (col.key === 'policyno' && val) commitExtraRow(extraIdx);
+                        });
+                        input.addEventListener('keydown', e => {
+                            if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); input.blur(); }
+                            if (e.key === 'Escape') { input.value = ''; input.blur(); }
+                        });
+                        td.appendChild(input);
+                        input.focus();
+                    });
                 }
                 tr.appendChild(td);
             });

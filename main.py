@@ -429,6 +429,148 @@ def get_available_months():
     return [dict(r) for r in rows]
 
 
+# ── Add single policy to master data ──────────────────────────────────────────
+
+@app.post("/api/master/new")
+async def create_master_policy(request: Request):
+    """Add a single policy directly to master_policies (permanent)."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON.")
+
+    pno = (body.get("policyno") or "").strip()
+    if not pno:
+        raise HTTPException(400, "policyno is required.")
+
+    master_fields = ["name", "doc", "fup", "sumass", "plan", "mode", "premium", "mobileno", "status"]
+    now_str = datetime.now().isoformat()
+
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM master_policies WHERE policyno=?", (pno,)
+        ).fetchone()
+
+        if existing:
+            # Update any provided fields
+            updates, params = [], []
+            for f in master_fields:
+                if f in body and body[f] is not None:
+                    updates.append(f"{f} = ?")
+                    params.append(body[f])
+            if updates:
+                updates.append("updated_at = ?")
+                params.append(now_str)
+                params.append(pno)
+                conn.execute(
+                    f"UPDATE master_policies SET {', '.join(updates)} WHERE policyno=?", params
+                )
+            action = "updated"
+        else:
+            vals = {f: body.get(f) for f in master_fields}
+            vals["policyno"] = pno
+            vals["updated_at"] = now_str
+            if vals.get("fup"):
+                d = parse_date(vals["fup"])
+                vals["fup_day"] = d.day if d else 0
+            cols = [k for k in vals if vals[k] is not None]
+            conn.execute(
+                f"INSERT INTO master_policies ({','.join(cols)}) VALUES ({','.join('?' for _ in cols)})",
+                [vals[c] for c in cols]
+            )
+            action = "created"
+
+    db_push()
+    return {"message": f"Policy {action}.", "policyno": pno, "action": action}
+
+
+# ── Add single entry to monthly list (auto-syncs to master) ───────────────────
+
+@app.post("/api/list/{year}/{month}/new")
+async def create_monthly_entry(year: int, month: int, request: Request):
+    """Add a single entry to a monthly list. If policyno not in master, adds it there too."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON.")
+
+    pno = (body.get("policyno") or "").strip()
+    if not pno:
+        raise HTTPException(400, "policyno is required.")
+
+    master_fields = ["name", "doc", "fup", "sumass", "plan", "mode", "premium", "mobileno", "status"]
+    now_str = datetime.now().isoformat()
+
+    with get_db() as conn:
+        # Ensure monthly list exists for this year/month
+        list_row = conn.execute(
+            "SELECT id FROM monthly_lists WHERE year=? AND month=?", (year, month)
+        ).fetchone()
+        if not list_row:
+            conn.execute(
+                "INSERT INTO monthly_lists (year, month, generated_at) VALUES (?,?,?)",
+                (year, month, now_str)
+            )
+            list_row = conn.execute(
+                "SELECT id FROM monthly_lists WHERE year=? AND month=?", (year, month)
+            ).fetchone()
+        list_id = list_row["id"]
+
+        # Check if entry already exists in this list
+        existing_entry = conn.execute(
+            "SELECT id FROM monthly_entries WHERE list_id=? AND policyno=?", (list_id, pno)
+        ).fetchone()
+
+        fup_val = body.get("fup", "")
+        fup_day = 0
+        if fup_val:
+            d = parse_date(fup_val)
+            fup_day = d.day if d else 0
+
+        if existing_entry:
+            raise HTTPException(409, f"Policy {pno} already exists in this month's list.")
+
+        # Insert into monthly_entries
+        entry_fields = master_fields + NOTE_COLS
+        vals = {f: body.get(f, "") for f in entry_fields}
+        vals["policyno"] = pno
+        vals["list_id"] = list_id
+        vals["fup_day"] = fup_day
+        vals["updated_at"] = now_str
+        cols = list(vals.keys())
+        conn.execute(
+            f"INSERT INTO monthly_entries ({','.join(cols)}) VALUES ({','.join('?' for _ in cols)})",
+            [vals[c] for c in cols]
+        )
+        new_id = conn.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
+
+        # Auto-add to master if not present
+        master_exists = conn.execute(
+            "SELECT id FROM master_policies WHERE policyno=?", (pno,)
+        ).fetchone()
+        added_to_master = False
+        if not master_exists:
+            mvals = {f: body.get(f) for f in master_fields}
+            mvals["policyno"] = pno
+            mvals["updated_at"] = now_str
+            if fup_day:
+                mvals["fup_day"] = fup_day
+            mcols = [k for k in mvals if mvals[k] is not None]
+            conn.execute(
+                f"INSERT INTO master_policies ({','.join(mcols)}) VALUES ({','.join('?' for _ in mcols)})",
+                [mvals[c] for c in mcols]
+            )
+            added_to_master = True
+
+    db_push()
+    return {
+        "message": "Entry created.",
+        "id": new_id,
+        "policyno": pno,
+        "added_to_master": added_to_master
+    }
+
+
 @app.put("/api/entry/{entry_id}")
 async def update_entry(entry_id: int, request: Request):
     """Update a monthly entry. Also updates master data for the same policy."""
