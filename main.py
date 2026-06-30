@@ -17,6 +17,15 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app):
     """Start background sync task on startup, cancel on shutdown."""
+    # Clean junk data (summary rows with non-9-digit policy numbers)
+    try:
+        with get_db() as conn:
+            del_master = conn.execute("DELETE FROM master_policies WHERE LENGTH(policyno) != 9").rowcount
+            del_monthly = conn.execute("DELETE FROM monthly_entries WHERE LENGTH(policyno) != 9").rowcount
+            if del_master or del_monthly:
+                log.info(f"Cleaned junk data: {del_master} master, {del_monthly} monthly entries removed")
+    except Exception as e:
+        log.warning(f"Startup cleanup skipped: {e}")
     task = asyncio.create_task(master_sync_loop())
     yield
     task.cancel()

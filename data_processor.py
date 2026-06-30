@@ -129,7 +129,10 @@ def normalize_policyno(v):
     s = re.sub(r"[,\s\.]", "", s)
     # Must look like a number (policy numbers are numeric)
     digits = re.sub(r"\D", "", s)
-    return digits if digits else None
+    # LIC policy numbers are always exactly 9 digits
+    if len(digits) != 9:
+        return None
+    return digits
 
 
 def to_number_str(v):
@@ -282,7 +285,8 @@ def parse_excel(content, filename):
 
     for sheet in xls.sheet_names:
         # Skip known non-data sheets
-        if "scribbled" in sheet.lower():
+        sheet_lower = sheet.lower()
+        if any(skip in sheet_lower for skip in ("scribbled", "summary", "sheet2", "sheet3")):
             continue
 
         df_raw = pd.read_excel(xls, sheet_name=sheet, dtype=str, header=None, nrows=10)
