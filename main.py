@@ -34,21 +34,110 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # ── Database ────────────────────────────────────────────────────────────────────
 # Local dev  → plain SQLite file (online_sheet.db)
-# Production → Turso cloud DB via libsql-experimental (set env vars on Render)
+# Production → Turso cloud via pure-Python HTTP client (no Rust/compilation needed)
 
 TURSO_URL   = os.environ.get("TURSO_DATABASE_URL", "")
 TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "")
 USE_TURSO   = bool(TURSO_URL and TURSO_TOKEN)
 
-DB_PATH = os.path.join(BASE_DIR, "online_sheet.db")  # always keep local file for fallback
+DB_PATH = os.path.join(BASE_DIR, "online_sheet.db")
 
 if USE_TURSO:
-    try:
-        import libsql_experimental as libsql
-        log.info("Turso / libsql-experimental loaded ✓")
-    except ImportError:
-        log.warning("libsql-experimental not installed — falling back to local SQLite")
-        USE_TURSO = False
+    log.info("Turso mode active — using HTTP pipeline API ✓")
+
+
+class TursoConn:
+    """
+    Minimal sqlite3-compatible wrapper for Turso's HTTP pipeline API (hrana-3).
+    Pure Python — no Rust compilation, works on any Python version.
+    """
+
+    def __init__(self, url: str, token: str):
+        self._endpoint = url.rstrip("/").replace("libsql://", "https://") + "/v2/pipeline"
+        self._auth     = f"Bearer {token}"
+        self.row_factory = None
+        self._rows: list = []
+        self._idx:  int  = 0
+
+    # ── Value marshalling ────────────────────────────────────────────────────
+    @staticmethod
+    def _to_arg(v):
+        if v is None:            return {"type": "null",    "value": None}
+        if isinstance(v, bool):  return {"type": "integer", "value": "1" if v else "0"}
+        if isinstance(v, int):   return {"type": "integer", "value": str(v)}
+        if isinstance(v, float): return {"type": "float",   "value": str(v)}
+        return {"type": "text", "value": str(v)}
+
+    @staticmethod
+    def _from_cell(cell):
+        t, v = cell.get("type"), cell.get("value")
+        if t == "null":    return None
+        if t == "integer": return int(v)  if v is not None else None
+        if t == "float":   return float(v) if v is not None else None
+        return v  # text / blob
+
+    def _parse(self, result: dict):
+        cols = result.get("cols", [])
+        raw  = result.get("rows", [])
+        parsed = [[self._from_cell(c) for c in row] for row in raw]
+        if self.row_factory:
+            class _FC:
+                def __init__(self, c): self.description = [(x["name"],) for x in c]
+            fc = _FC(cols)
+            self._rows = [self.row_factory(fc, r) for r in parsed]
+        else:
+            self._rows = parsed
+        self._idx = 0
+
+    # ── HTTP call ────────────────────────────────────────────────────────────
+    def _call(self, requests: list) -> dict:
+        import urllib.request
+        body = json.dumps({"baton": None, "requests": requests}).encode()
+        req  = urllib.request.Request(
+            self._endpoint, data=body, method="POST",
+            headers={"Authorization": self._auth, "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read())
+
+    # ── sqlite3-compatible interface ─────────────────────────────────────────
+    def execute(self, sql: str, params=()):
+        args = [self._to_arg(p) for p in (params or [])]
+        resp = self._call([
+            {"type": "execute", "stmt": {"sql": sql, "args": args}},
+            {"type": "close"},
+        ])
+        res = resp["results"][0]
+        if res["type"] == "error":
+            raise Exception(res.get("error", {}).get("message", "Turso error"))
+        self._parse(res["response"]["result"])
+        return self
+
+    def executemany(self, sql: str, param_list):
+        """Batch all statements into a single HTTP pipeline call."""
+        stmts = [
+            {"type": "execute", "stmt": {"sql": sql, "args": [self._to_arg(p) for p in params]}}
+            for params in param_list
+        ]
+        stmts.append({"type": "close"})
+        resp = self._call(stmts)
+        for i, res in enumerate(resp["results"][:-1]):
+            if res["type"] == "error":
+                raise Exception(res.get("error", {}).get("message", f"Turso error at stmt {i}"))
+        self._rows = []; self._idx = 0
+        return self
+
+    def fetchone(self):
+        if self._idx >= len(self._rows): return None
+        r = self._rows[self._idx]; self._idx += 1; return r
+
+    def fetchall(self):
+        r = self._rows[self._idx:]; self._idx = len(self._rows); return r
+
+    def commit(self): pass   # Turso auto-commits every statement
+    def close(self):  pass
+    def __enter__(self): return self
+    def __exit__(self, *_): self.close()
 
 
 def dict_factory(cursor, row):
@@ -56,34 +145,19 @@ def dict_factory(cursor, row):
 
 
 def get_db():
-    """Return a DB connection. Turso in production, SQLite locally."""
+    """Return a DB connection — Turso HTTP in production, SQLite locally."""
     if USE_TURSO:
-        conn = libsql.connect(
-            database=DB_PATH,      # local replica cache
-            sync_url=TURSO_URL,
-            auth_token=TURSO_TOKEN,
-        )
-        conn.sync()                # pull latest state from Turso
+        conn = TursoConn(TURSO_URL, TURSO_TOKEN)
     else:
         conn = sqlite3.connect(DB_PATH)
         conn.execute("PRAGMA journal_mode=WAL")
-
     conn.row_factory = dict_factory
     return conn
 
 
 def db_push():
-    """Push writes to Turso (no-op when running locally)."""
-    if USE_TURSO:
-        conn = libsql.connect(
-            database=DB_PATH,
-            sync_url=TURSO_URL,
-            auth_token=TURSO_TOKEN,
-        )
-        try:
-            conn.sync()
-        finally:
-            conn.close()
+    """No-op — Turso auto-commits; SQLite writes are already durable."""
+    pass
 
 
 NOTE_COLS = [f"note{i}" for i in range(1, 11)]  # note1..note10
