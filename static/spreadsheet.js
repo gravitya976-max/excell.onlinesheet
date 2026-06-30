@@ -388,28 +388,30 @@ const Spreadsheet = (() => {
     }
 
     /* ── Start editing ───────────────────────────────────────────────── */
-    function startEdit(td, col, entry) {
+    function startEdit(td, col, entry, initialKey) {
+        // Status cells are handled entirely by Navigation
+        if (col.type === 'status') return;
+
         td.classList.add('editing');
         td.innerHTML = '';
         currentEditCell = td;
-
-        if (col.type === 'status') createStatusKeystrokeInput(td, entry[col.key] || '', entry, col);
-        else createTextInput(td, entry[col.key] || '', entry, col);
+        if (typeof Navigation !== 'undefined') Navigation.setEditing(true);
+        createTextInput(td, entry[col.key] || '', entry, col, initialKey);
     }
 
-    function createTextInput(td, value, entry, col) {
+    function createTextInput(td, value, entry, col, initialKey) {
         const isNote = col.key.startsWith('note');
         const input = document.createElement('input');
         input.type = 'text'; input.className = 'cell-input';
-        // For notes, show raw value (user edits without date prefix)
-        input.value = value;
+        // If initialKey provided, start with that character
+        input.value = initialKey || value;
 
         input.addEventListener('blur', () => {
             let nv = input.value.trim();
             finishEdit(td);
+            if (typeof Navigation !== 'undefined') Navigation.setEditing(false);
 
             // Auto date-tag ONLY when the cell was empty before
-            // If it already had content, the user is editing — save as-is
             if (isNote && nv && !value) {
                 const now = new Date();
                 const dd = String(now.getDate()).padStart(2, '0');
@@ -419,6 +421,8 @@ const Spreadsheet = (() => {
 
             if (nv !== value) { entry[col.key] = nv; saveCell(td, entry.id, col.key, nv); }
             restoreCellDisplay(td, col, entry, nv);
+            // Re-select the cell in Navigation after edit
+            if (typeof Navigation !== 'undefined') Navigation.selectCell(td);
         });
 
         input.addEventListener('keydown', (e) => {
@@ -427,44 +431,13 @@ const Spreadsheet = (() => {
             else if (e.key === 'Tab') { e.preventDefault(); input.blur(); moveToNextEditable(td, col, entry, e.shiftKey); }
         });
 
-        td.appendChild(input); input.focus(); input.select();
-    }
-
-    function createStatusKeystrokeInput(td, value, entry, col) {
-        // Show current status text inside the marching-ants cell
-        const label = document.createElement('span');
-        label.className = 'cell-content';
-        label.textContent = STATUS_LABELS[value] || value || 'Due';
-        td.appendChild(label);
-
-        // Hidden input to capture keystrokes
-        const trap = document.createElement('input');
-        trap.style.cssText = 'position:absolute;opacity:0;width:0;height:0;pointer-events:none;';
-        td.appendChild(trap);
-        trap.focus();
-
-        trap.addEventListener('keydown', (e) => {
-            const key = e.key.toLowerCase();
-            if (key in STATUS_KEYS) {
-                e.preventDefault();
-                const newVal = STATUS_KEYS[key];
-                if (newVal !== value) {
-                    entry[col.key] = newVal;
-                    saveCell(td, entry.id, col.key, newVal);
-                }
-                finishEdit(td);
-                restoreCellDisplay(td, col, entry, newVal);
-                addStatusClass(td, newVal);
-            } else if (key === 'escape') {
-                finishEdit(td);
-                restoreCellDisplay(td, col, entry, value);
-            }
-        });
-
-        trap.addEventListener('blur', () => {
-            finishEdit(td);
-            restoreCellDisplay(td, col, entry, value);
-        });
+        td.appendChild(input); input.focus();
+        if (initialKey) {
+            // Cursor at end when typing fresh
+            input.setSelectionRange(input.value.length, input.value.length);
+        } else {
+            input.select();
+        }
     }
 
     function finishEdit(td) { td.classList.remove('editing'); if (currentEditCell === td) currentEditCell = null; }
@@ -527,5 +500,14 @@ const Spreadsheet = (() => {
     }
     startClock();
 
-    return { render, COLUMNS };
+    return {
+        render,
+        COLUMNS,
+        // Exposed for Navigation module
+        _saveCell: saveCell,
+        _restoreCell: restoreCellDisplay,
+        _addStatusClass: addStatusClass,
+        _startEdit: startEdit,
+        _finishEdit: finishEdit,
+    };
 })();

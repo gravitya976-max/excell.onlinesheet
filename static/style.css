@@ -8,7 +8,7 @@
     --bg-surface: #ffffff;
     --bg-elevated: #f0f2f5;
     --bg-cell: #ffffff;
-    --bg-cell-hover: #f0f4ff;
+    --bg-cell-hover: #E0D6FF;
     --bg-cell-edit: #eef2ff;
     --bg-header: #f8f9fb;
     --bg-header-cell: #eef0f4;
@@ -114,15 +114,41 @@ mark.search-hl { background: #fef08a; color: inherit; padding: 0 1px; border-rad
 .spreadsheet { border-collapse: collapse; table-layout: fixed; font-size: 13px; }
 .spreadsheet thead { position: sticky; top: 0; z-index: 10; }
 .spreadsheet th { background: var(--bg-header-cell); color: var(--text-secondary); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 10px; border: 1px solid var(--border); border-top: none; text-align: center; vertical-align: middle; user-select: none; white-space: nowrap; position: relative; overflow: visible; }
-.spreadsheet td { padding: 0; border: 1px solid var(--border); background: var(--bg-cell); height: 34px; font-family: var(--font-mono); font-size: 12.5px; color: var(--text-primary); position: relative; transition: background var(--transition); overflow: hidden; text-align: center; vertical-align: middle; }
+.spreadsheet td { padding: 0; border: 1px solid var(--border); background: var(--bg-cell); height: 28px; font-family: var(--font-mono); font-size: 12.5px; color: var(--text-primary); position: relative; transition: background var(--transition); overflow: hidden; text-align: center; vertical-align: middle; }
 .spreadsheet tr:hover td { background: var(--bg-cell-hover); }
 .spreadsheet tr:nth-child(even) td { background: #f9fafb; }
 .spreadsheet tr:nth-child(even):hover td { background: var(--bg-cell-hover); }
-.cell-content { display: flex; align-items: center; justify-content: center; padding: 6px 10px; width: 100%; height: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+/* Disable hover on all rows when a cell is selected */
+.spreadsheet.nav-has-selection tr:hover td { background: var(--bg-cell); }
+.spreadsheet.nav-has-selection tr:nth-child(even):hover td { background: #f9fafb; }
+/* But keep the selected row highlighted */
+.spreadsheet.nav-has-selection tr.nav-active-row td { background: var(--bg-cell-hover) !important; }
+.cell-content { display: flex; align-items: center; justify-content: center; padding: 4px 8px; width: 100%; height: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+/* Row stays highlighted when a cell in it is selected */
+.spreadsheet tr.nav-active-row td { background: var(--bg-cell-hover); }
 td.editable .cell-content { cursor: cell; }
-td.editable:hover { outline: 2px solid var(--border-focus); outline-offset: -2px; z-index: 5; }
-td.editing { background: var(--bg-cell-edit) !important; outline: none !important; position: relative; z-index: 6; }
-td.editing::before { content: ''; position: absolute; inset: 0; border: 2px dashed var(--accent); pointer-events: none; animation: marchingAnts 0.6s linear infinite; z-index: 10; }
+/* Navigation: single-click selected cell */
+td.nav-selected { outline: 2px solid var(--accent) !important; outline-offset: -2px; z-index: 6; }
+td.nav-selected.col-status { outline: none !important; overflow: visible !important; }
+td.nav-selected.col-status::before {
+    content: '';
+    position: absolute;
+    inset: 1px;
+    pointer-events: none;
+    z-index: 10;
+    background:
+        linear-gradient(90deg, var(--accent) 50%, transparent 50%) top    / 8px 2px repeat-x,
+        linear-gradient(90deg, var(--accent) 50%, transparent 50%) bottom / 8px 2px repeat-x,
+        linear-gradient(0deg,  var(--accent) 50%, transparent 50%) left   / 2px 8px repeat-y,
+        linear-gradient(0deg,  var(--accent) 50%, transparent 50%) right  / 2px 8px repeat-y;
+    animation: marchingAnts 1.5s linear infinite;
+}
+/* Editing state */
+td.editing { background: var(--bg-cell-edit) !important; outline: 2px solid var(--accent) !important; outline-offset: -2px; position: relative; z-index: 6; }
+@keyframes marchingAnts {
+    0%   { background-position: 0 0, 0 100%, 0 0, 100% 0; }
+    100% { background-position: 16px 0, -16px 100%, 0 -16px, 100% 16px; }
+}
 td.editing .cell-input { display: block; width: 100%; height: 100%; padding: 6px 10px; background: transparent; border: none; outline: none; color: var(--text-primary); font-family: var(--font-mono); font-size: 12.5px; text-align: center; }
 td.locked { color: var(--text-muted); }
 td.col-sn .cell-content { color: var(--text-muted); font-size: 11px; }
@@ -172,13 +198,6 @@ td.status-dailycollection { background: #eff6ff !important; }
 td.status-dailycollection .cell-content { color: var(--blue); font-weight: 600; }
 td.status-branchpaid { background: #fff7ed !important; }
 td.status-branchpaid .cell-content { color: var(--orange); font-weight: 600; }
-
-@keyframes marchingAnts {
-    0%   { border-color: var(--accent); }
-    50%  { border-color: transparent; }
-    100% { border-color: var(--accent); }
-}
-
 
 /* ── Cell save indicators ──────────────────────────────────────────── */
 td.saving::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--yellow); animation: pulse 0.8s ease infinite; }
