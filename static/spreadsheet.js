@@ -353,8 +353,13 @@ const Spreadsheet = (() => {
                 else { span.textContent = value; }
                 td.appendChild(span);
 
-                // Double left-click → edit
+                // Double left-click → edit (all columns)
                 attachEditDblClick(td, col, entry);
+
+                // Status column: single click + keystroke shortcut
+                if (col.type === 'status') {
+                    attachStatusKeyShortcut(td, col, entry);
+                }
             }
 
             tr.appendChild(td);
@@ -365,6 +370,67 @@ const Spreadsheet = (() => {
 
     function attachEditDblClick(td, col, entry) {
         td.addEventListener('dblclick', (e) => onCellDblClick(e, td, col, entry));
+    }
+
+    /* ── Status keystroke shortcuts ─────────────────────────────────────
+       Single-click selects cell → press p/a/d/c/b to set status instantly.
+       p = Paid, a = Auto Debit, d = Due, c = Daily Collection, b = Branch Paid
+    ───────────────────────────────────────────────────────────────────── */
+    const STATUS_KEYS = {
+        'p': 'paid',
+        'a': 'autodebit',
+        'd': '',           // empty string = Due
+        'c': 'dailycollection',
+        'b': 'branchpaid',
+    };
+
+    let _selectedStatusCell = null;
+
+    function attachStatusKeyShortcut(td, col, entry) {
+        td.setAttribute('tabindex', '0');
+        td.style.cursor = 'pointer';
+
+        td.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // Deselect previous
+            if (_selectedStatusCell && _selectedStatusCell !== td) {
+                _selectedStatusCell.classList.remove('status-selected');
+            }
+            _selectedStatusCell = td;
+            td.classList.add('status-selected');
+            td.focus();
+        });
+
+        td.addEventListener('keydown', (e) => {
+            const key = e.key.toLowerCase();
+            if (key in STATUS_KEYS) {
+                e.preventDefault();
+                const newVal = STATUS_KEYS[key];
+                const oldVal = entry[col.key] || '';
+                if (newVal !== oldVal) {
+                    entry[col.key] = newVal;
+                    saveCell(td, entry.id, col.key, newVal);
+                }
+                // Update display
+                restoreCellDisplay(td, col, entry, newVal);
+                addStatusClass(td, newVal);
+                // Re-attach shortcut since restoreCellDisplay rebuilds the td
+                attachStatusKeyShortcut(td, col, entry);
+                td.classList.add('status-selected');
+                td.focus();
+            } else if (key === 'escape') {
+                td.classList.remove('status-selected');
+                td.blur();
+                _selectedStatusCell = null;
+            }
+        });
+
+        td.addEventListener('blur', () => {
+            // Small delay so click on another status cell works
+            setTimeout(() => {
+                if (_selectedStatusCell !== td) td.classList.remove('status-selected');
+            }, 100);
+        });
     }
 
     function addStatusClass(td, value) {

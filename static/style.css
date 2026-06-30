@@ -172,6 +172,10 @@ td.status-dailycollection .cell-content { color: var(--blue); font-weight: 600; 
 td.status-branchpaid { background: #fff7ed !important; }
 td.status-branchpaid .cell-content { color: var(--orange); font-weight: 600; }
 
+/* ── Status cell selected (waiting for keystroke) ──────────────────── */
+td.status-selected { outline: 2px solid var(--accent) !important; outline-offset: -2px; z-index: 6; cursor: pointer; }
+td.status-selected:focus { outline: 2px solid var(--accent) !important; }
+
 /* ── Cell save indicators ──────────────────────────────────────────── */
 td.saving::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--yellow); animation: pulse 0.8s ease infinite; }
 td.saved::after { content: '✓'; position: absolute; top: 2px; right: 5px; font-size: 10px; color: var(--green); animation: fadeOut 1.5s ease forwards; }

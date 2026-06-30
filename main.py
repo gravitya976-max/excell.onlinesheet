@@ -234,13 +234,32 @@ init_db()
 _STATUS_SKIP = {"due", "paid", ""}
 
 async def master_sync_loop():
-    """Every 3 minutes, flush pending_syncs → master_policies."""
+    """Every 3 minutes: flush pending_syncs → master, and auto-generate monthly list on the 1st."""
+    _last_auto_gen = ""  # track "YYYY-MM" to avoid re-generating same month
     while True:
         await asyncio.sleep(SYNC_INTERVAL_SECONDS)
         try:
             flush_pending_syncs()
         except Exception as e:
             log.error(f"Sync error: {e}")
+
+        # Auto-generate monthly list on the 1st of each month
+        try:
+            now = datetime.now()
+            month_key = f"{now.year}-{now.month:02d}"
+            if now.day == 1 and month_key != _last_auto_gen:
+                # Check if list already exists for this month
+                with get_db() as conn:
+                    existing = conn.execute(
+                        "SELECT id FROM monthly_lists WHERE year=? AND month=?",
+                        (now.year, now.month)
+                    ).fetchone()
+                if not existing:
+                    generate_list_internal(now.year, now.month)
+                    log.info(f"Auto-generated monthly list for {now.month}/{now.year}")
+                _last_auto_gen = month_key
+        except Exception as e:
+            log.error(f"Auto-generate error: {e}")
 
 def flush_pending_syncs():
     """Process all pending syncs: apply to master_policies, then clear."""
@@ -448,10 +467,13 @@ def generate_list(year: int = Query(None), month: int = Query(None)):
     now = date.today()
     target_year = year or now.year
     target_month = month or now.month
-
     if not 1 <= target_month <= 12:
         raise HTTPException(400, "Month must be 1-12.")
+    return generate_list_internal(target_year, target_month)
 
+
+def generate_list_internal(target_year: int, target_month: int):
+    """Core generation logic — called by API and auto-gen background task."""
     with get_db() as conn:
         all_policies = conn.execute("SELECT * FROM master_policies").fetchall()
         source_total = len(all_policies)
