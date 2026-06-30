@@ -97,7 +97,7 @@ class TursoConn:
             self._endpoint, data=body, method="POST",
             headers={"Authorization": self._auth, "Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=120) as r:
             return json.loads(r.read())
 
     # ── sqlite3-compatible interface ─────────────────────────────────────────
@@ -112,6 +112,27 @@ class TursoConn:
             raise Exception(res.get("error", {}).get("message", "Turso error"))
         self._parse(res["response"]["result"])
         return self
+
+    def execute_batch(self, stmts_with_params: list):
+        """
+        Send multiple different SQL statements in ONE HTTP pipeline call.
+        stmts_with_params: list of (sql, params_tuple) pairs.
+        Returns list of parsed results (one per statement).
+        """
+        requests = []
+        for sql, params in stmts_with_params:
+            args = [self._to_arg(p) for p in (params or [])]
+            requests.append({"type": "execute", "stmt": {"sql": sql, "args": args}})
+        requests.append({"type": "close"})
+        resp = self._call(requests)
+
+        results = []
+        for i, res in enumerate(resp["results"][:-1]):  # skip the close result
+            if res["type"] == "error":
+                raise Exception(res.get("error", {}).get("message", f"Turso batch error at stmt {i}"))
+            self._parse(res["response"]["result"])
+            results.append(list(self._rows))
+        return results
 
     def executemany(self, sql: str, param_list):
         """Batch all statements into a single HTTP pipeline call."""
@@ -268,21 +289,30 @@ from data_processor import (
 # ── Master data upsert ─────────────────────────────────────────────────────────
 
 def upsert_master(records):
-    """Insert or progressively enrich master data. Never duplicate."""
+    """Insert or progressively enrich master data. Never duplicate.
+    Optimised: fetches all existing rows in ONE query, then batches all
+    INSERT/UPDATE statements into a single HTTP pipeline call (for Turso).
+    """
     inserted, updated = 0, 0
     non_pno = [f for f in FIELDS if f != "policyno"]
 
-    with get_db() as conn:
+    conn = get_db()
+    try:
+        # 1) Fetch ALL existing master records in one query
+        all_existing = conn.execute("SELECT * FROM master_policies").fetchall()
+        existing_map = {r["policyno"]: r for r in all_existing}
+
+        # 2) Build list of SQL statements to execute
+        batch_stmts = []  # list of (sql, params) tuples
+        now_str = datetime.now().isoformat()
+
         for rec in records:
             pno = rec.get("policyno")
             if not pno:
                 continue
-            existing = conn.execute(
-                "SELECT * FROM master_policies WHERE policyno = ?", (pno,)
-            ).fetchone()
 
+            existing = existing_map.get(pno)
             if existing:
-                # Only fill empty fields (progressive enrichment)
                 updates, params = [], []
                 for f in non_pno:
                     new_val = rec.get(f)
@@ -294,23 +324,35 @@ def upsert_master(records):
                         params.append(new_val)
                 if updates:
                     updates.append("updated_at = ?")
-                    params.append(datetime.now().isoformat())
+                    params.append(now_str)
                     params.append(pno)
-                    conn.execute(
+                    batch_stmts.append((
                         f"UPDATE master_policies SET {', '.join(updates)} WHERE policyno = ?",
                         params
-                    )
+                    ))
                     updated += 1
             else:
                 vals = {f: rec.get(f) for f in FIELDS}
                 vals["policyno"] = pno
-                vals["updated_at"] = datetime.now().isoformat()
+                vals["updated_at"] = now_str
                 cols = list(vals.keys())
-                conn.execute(
+                batch_stmts.append((
                     f"INSERT INTO master_policies ({','.join(cols)}) VALUES ({','.join('?' for _ in cols)})",
                     [vals[c] for c in cols]
-                )
+                ))
                 inserted += 1
+                existing_map[pno] = vals  # avoid duplicate inserts within same batch
+
+        # 3) Execute all in one call (Turso: 1 HTTP request; SQLite: loop)
+        if batch_stmts:
+            if USE_TURSO and hasattr(conn, 'execute_batch'):
+                conn.execute_batch(batch_stmts)
+            else:
+                for sql, params in batch_stmts:
+                    conn.execute(sql, params)
+    finally:
+        conn.close()
+
     return inserted, updated
 
 
