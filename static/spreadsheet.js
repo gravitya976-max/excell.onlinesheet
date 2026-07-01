@@ -2,8 +2,8 @@
    Online Sheet — Spreadsheet Rendering & Inline Editing
 
    INTERACTIONS:
-     • Double LEFT-CLICK on a cell   →  edit that cell
-     • Single RIGHT-CLICK on a row   →  copy policy number
+     • Double LEFT-CLICK on a row    →  copy policy number
+     • Single RIGHT-CLICK on a cell  →  edit that cell
      • Double LEFT-CLICK a header    →  rename the header
    ══════════════════════════════════════════════════════════════════════ */
 
@@ -143,12 +143,15 @@ const Spreadsheet = (() => {
     }
 
     /* ════════════════════════════════════════════════════════════════════
-       SINGLE RIGHT-CLICK → copy policy number
+       SINGLE RIGHT-CLICK → edit cell
        ════════════════════════════════════════════════════════════════════ */
-    function onRowRightClick(e, tr) {
+    function onCellRightClick(e, td, col, entry) {
         e.preventDefault(); // block browser context menu
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-        copyPolicyNo(tr);
+        if (!col.editable) return;
+        if (td.classList.contains('editing')) return;
+        closeActiveEdit();
+        startEdit(td, col, entry);
     }
 
     function copyPolicyNo(tr) {
@@ -215,16 +218,11 @@ const Spreadsheet = (() => {
     }
 
     /* ════════════════════════════════════════════════════════════════════
-       DOUBLE LEFT-CLICK → edit cell
-       Uses the native 'dblclick' event — no timers needed
+       DOUBLE LEFT-CLICK → copy policy number
        ════════════════════════════════════════════════════════════════════ */
-    function onCellDblClick(e, td, col, entry) {
-        e.stopPropagation();
+    function onRowDblClick(e, tr) {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-        if (!col.editable) return;
-        if (td.classList.contains('editing')) return;
-        closeActiveEdit();
-        startEdit(td, col, entry);
+        copyPolicyNo(tr);
     }
 
     function closeActiveEdit() {
@@ -316,8 +314,8 @@ const Spreadsheet = (() => {
         tr.dataset.entryId = entry.id;
         if (rowHeights[idx]) tr.style.height = rowHeights[idx] + 'px';
 
-        // Single right-click anywhere on the row → copy policy number
-        tr.addEventListener('contextmenu', (e) => onRowRightClick(e, tr));
+        // Double left-click anywhere on the row → copy policy number
+        tr.addEventListener('dblclick', (e) => onRowDblClick(e, tr));
 
         COLUMNS.forEach(col => {
             const td = document.createElement('td');
@@ -353,8 +351,8 @@ const Spreadsheet = (() => {
                 else { span.textContent = value; }
                 td.appendChild(span);
 
-                // Double left-click → edit (all columns)
-                attachEditDblClick(td, col, entry);
+                // Single right-click → edit (all columns)
+                attachEditRightClick(td, col, entry);
             }
 
             tr.appendChild(td);
@@ -363,8 +361,8 @@ const Spreadsheet = (() => {
         return tr;
     }
 
-    function attachEditDblClick(td, col, entry) {
-        td.addEventListener('dblclick', (e) => onCellDblClick(e, td, col, entry));
+    function attachEditRightClick(td, col, entry) {
+        td.addEventListener('contextmenu', (e) => onCellRightClick(e, td, col, entry));
     }
 
     /* ── Status keystroke map ───────────────────────────────────────────
@@ -448,7 +446,7 @@ const Spreadsheet = (() => {
         span.className = 'cell-content';
         span.textContent = (col.type === 'status') ? (STATUS_LABELS[value] || value || 'Due') : (value || '');
         td.appendChild(span);
-        attachEditDblClick(td, col, entry);
+        attachEditRightClick(td, col, entry);
     }
 
     async function saveCell(td, entryId, field, value) {
