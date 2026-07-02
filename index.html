@@ -10,6 +10,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css?v=35">
+    <link rel="stylesheet" href="/static/crm.css?v=1">
 </head>
 <body>
     <!-- ── Top Bar ──────────────────────────────────────────────────────── -->
@@ -23,7 +24,7 @@
                 </svg>
                 <div class="logo-text">
                     <h1>Online Sheet</h1>
-                    <span class="app-version">version 1.4.2</span>
+                    <span class="app-version">version 1.5.0</span>
                 </div>
             </div>
             <div class="tab-bar">
@@ -65,6 +66,15 @@
                 <input type="text" id="search-input" class="search-input" placeholder="Search..." autocomplete="off" spellcheck="false">
                 <button id="search-clear" class="search-clear hidden" title="Clear">&times;</button>
             </div>
+        </div>
+        <!-- CRM: Gateway dot + SMS/Call icons -->
+        <div class="crm-tools">
+            <div id="crm-gateway-dot" class="gateway-dot">
+                <span class="dot"></span> Gateway Offline
+            </div>
+            <button id="crm-sms-btn" class="crm-mode-btn" title="SMS Mode"><svg width="20" height="20" viewBox="0 0 640 640" fill="currentColor"><path d="M267.7 576.9C267.7 576.9 267.7 576.9 267.7 576.9L229.9 603.6C222.6 608.8 213 609.4 205 605.3C197 601.2 192 593 192 584L192 512L160 512C107 512 64 469 64 416L64 192C64 139 107 96 160 96L480 96C533 96 576 139 576 192L576 416C576 469 533 512 480 512L359.6 512L267.7 576.9zM332 472.8C340.1 467.1 349.8 464 359.7 464L480 464C506.5 464 528 442.5 528 416L528 192C528 165.5 506.5 144 480 144L160 144C133.5 144 112 165.5 112 192L112 416C112 442.5 133.5 464 160 464L216 464C226.4 464 235.3 470.6 238.6 479.9C239.5 482.4 240 485.1 240 488L240 537.7C272.7 514.6 303.3 493 331.9 472.8z"/></svg></button>
+            <button id="crm-call-btn" class="crm-mode-btn" title="Call Mode"><svg width="20" height="20" viewBox="0 0 640 640" fill="currentColor"><path d="M376 32C504.1 32 608 135.9 608 264C608 277.3 597.3 288 584 288C570.7 288 560 277.3 560 264C560 162.4 477.6 80 376 80C362.7 80 352 69.3 352 56C352 42.7 362.7 32 376 32zM384 224C401.7 224 416 238.3 416 256C416 273.7 401.7 288 384 288C366.3 288 352 273.7 352 256C352 238.3 366.3 224 384 224zM352 152C352 138.7 362.7 128 376 128C451.1 128 512 188.9 512 264C512 277.3 501.3 288 488 288C474.7 288 464 277.3 464 264C464 215.4 424.6 176 376 176C362.7 176 352 165.3 352 152zM176.1 65.4C195.8 60 216.4 70.1 224.2 88.9L264.7 186.2C271.6 202.7 266.8 221.8 252.9 233.2L208.8 269.3C241.3 340.9 297.8 399.3 368.1 434.2L406.7 387C418 373.1 437.1 368.4 453.7 375.2L551 415.8C569.8 423.6 579.9 444.2 574.5 463.9L573 469.4C555.4 534.1 492.9 589.3 416.6 573.2C241.6 536.1 103.9 398.4 66.8 223.4C50.7 147.1 105.9 84.6 170.5 66.9L176 65.4z"/></svg></button>
+            <button id="crm-queue-btn" class="crm-mode-btn" title="SMS Queue"><svg width="20" height="20" viewBox="0 0 640 640" fill="currentColor"><path d="M160 64C142.3 64 128 78.3 128 96C128 113.7 142.3 128 160 128L160 139C160 181.4 176.9 222.1 206.9 252.1L274.8 320L206.9 387.9C176.9 417.9 160 458.6 160 501L160 512C142.3 512 128 526.3 128 544C128 561.7 142.3 576 160 576L480 576C497.7 576 512 561.7 512 544C512 526.3 497.7 512 480 512L480 501C480 458.6 463.1 417.9 433.1 387.9L365.2 320L433.1 252.1C463.1 222.1 480 181.4 480 139L480 128C497.7 128 512 113.7 512 96C512 78.3 497.7 64 480 64L160 64zM224 139L224 128L416 128L416 139C416 164.5 405.9 188.9 387.9 206.9L320 274.8L252.1 206.9C234.1 188.9 224 164.4 224 139z"/></svg></button>
         </div>
         <div id="realtime-clock" class="realtime-clock"></div>
     </div>
@@ -143,5 +153,37 @@
     <script src="/static/app.js?v=36"></script>
     <script src="/static/spreadsheet.js?v=36"></script>
     <script src="/static/navigation.js?v=35"></script>
+    <script src="/static/crm.js?v=1"></script>
+
+    <!-- CRM: Floating Selection Box -->
+    <div id="crm-float-box" class="crm-float-box">
+        <div id="crm-float-header" class="crm-float-header">
+            <div class="crm-float-tabs">
+                <button id="crm-tab-select" class="crm-tab active">
+                    <span id="crm-float-count">Selected (0)</span>
+                </button>
+                <button id="crm-tab-history" class="crm-tab">History</button>
+            </div>
+            <button id="crm-clear-all" class="crm-clear-all" title="Clear all">✕</button>
+        </div>
+        <div id="crm-float-list" class="crm-float-list"></div>
+        <div id="crm-float-footer" class="crm-float-footer">
+            <button id="crm-send-btn" class="crm-send-btn">Send SMS</button>
+        </div>
+    </div>
+
+    <!-- CRM: Call Confirmation Modal -->
+    <div id="crm-call-modal" class="crm-call-modal">
+        <div class="crm-call-card">
+            <h3>Call this contact?</h3>
+            <div class="call-detail"><strong id="crm-call-name"></strong></div>
+            <div class="call-detail">Policy: <strong id="crm-call-pno"></strong></div>
+            <div class="call-detail">Mobile: <strong id="crm-call-mobile"></strong></div>
+            <div class="crm-call-actions">
+                <button id="crm-call-cancel" class="crm-call-cancel">Cancel</button>
+                <button id="crm-call-do" class="crm-call-confirm"><i class="fa-solid fa-phone"></i> Call</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

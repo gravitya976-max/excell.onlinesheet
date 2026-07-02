@@ -26,6 +26,12 @@ async def lifespan(app):
                 log.info(f"Cleaned junk data: {del_master} master, {del_monthly} monthly entries removed")
     except Exception as e:
         log.warning(f"Startup cleanup skipped: {e}")
+    # Init CRM database (separate from main DB)
+    try:
+        from crm_routes import init_crm_db
+        init_crm_db()
+    except Exception as e:
+        log.warning(f"CRM DB init skipped: {e}")
     task = asyncio.create_task(master_sync_loop())
     yield
     task.cancel()
@@ -33,6 +39,10 @@ async def lifespan(app):
     except asyncio.CancelledError: pass
 
 app = FastAPI(title="Online Sheet", lifespan=lifespan)
+
+# ── CRM Router (SMS/Call features — separate file + separate DB) ────────────────
+from crm_routes import router as crm_router, init_crm_db
+app.include_router(crm_router)
 
 SYNC_INTERVAL_SECONDS = 180  # 3 minutes
 
