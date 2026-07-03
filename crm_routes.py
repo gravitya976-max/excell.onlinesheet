@@ -94,20 +94,19 @@ def init_crm_db():
         conn.execute("INSERT OR IGNORE INTO gateway_heartbeat (id, last_seen) VALUES (1, NULL)")
 
 
-# ── SMS Templates ───────────────────────────────────────────────────────────────
+# GSM 7-bit only (no Unicode like ₹ — that triggers UCS-2 = 70 chars/segment).
+# Each template stays under 306 chars → 2 SMS segments (160+146).
 
 TEMPLATE_DUE = (
-    "Dear {name}, your due amount ₹{premium} for Policy No. {policy_no} "
-    "is not paid for the month {fup_month}. Please pay as soon as possible "
-    "or you may get a late penalty.\n\n"
-    "For help call +91{help_phone1} and +91{help_phone2}"
+    "Dear {name}, Rs.{premium} due for Policy No. {policy_no}, "
+    "not paid for {fup_month}. Pay ASAP to avoid late penalty. "
+    "Help: +91{help_phone1}, +91{help_phone2}"
 )
 
 TEMPLATE_AUTODEBIT = (
-    "Dear {name}, your due amount ₹{premium} for Policy No. {policy_no} "
-    "for the month {fup_month} will be auto debited on {debit_date}. "
-    "Please maintain sufficient balance or you may get a late penalty.\n\n"
-    "For help call +91{help_phone1} and +91{help_phone2}"
+    "Dear {name}, Rs.{premium} for Policy No. {policy_no} ({fup_month}) "
+    "will be auto debited on {debit_date}. Maintain sufficient balance "
+    "to avoid late penalty. Help: +91{help_phone1}, +91{help_phone2}"
 )
 
 MONTH_NAMES = [
