@@ -161,8 +161,8 @@
     padding: 10px;
     border: none;
     border-radius: 8px;
-    background: linear-gradient(135deg, #C9A84C, #b8962e);
-    color: #0f1c2e;
+    background: linear-gradient(135deg, #16a34a, #15803d);
+    color: #fff;
     font-weight: 700;
     font-size: 13px;
     cursor: pointer;
@@ -261,10 +261,10 @@
 
 /* ── SMS mode row highlight ──────────────────────────────────────── */
 tr.crm-selected {
-    background: rgba(201,168,76,0.08) !important;
+    background: rgba(22,163,74,0.06) !important;
 }
 tr.crm-selected td:first-child {
-    box-shadow: inset 3px 0 0 #C9A84C;
+    box-shadow: inset 3px 0 0 #16a34a;
 }
 
 /* ── Draggable ────────────────────────────────────────────────────── */
@@ -329,7 +329,7 @@ tr.crm-selected td:first-child {
     padding: 10px;
     border: none;
     border-radius: 8px;
-    background: linear-gradient(135deg, #5b6abf, #4a59a8);
+    background: #16a34a;
     color: #fff;
     font-weight: 700;
     font-size: 13px;

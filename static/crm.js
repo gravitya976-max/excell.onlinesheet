@@ -569,11 +569,13 @@ const CRM = (() => {
             if (!dot) return;
 
             if (data.online) {
-                dot.className = 'gateway-dot online';
-                dot.innerHTML = '<span class="dot"></span> Gateway Online';
+                dot.classList.add('online');
+                const lbl = dot.querySelector('.gateway-label');
+                if (lbl) lbl.textContent = 'Gateway Online';
             } else {
-                dot.className = 'gateway-dot';
-                dot.innerHTML = '<span class="dot"></span> Gateway Offline';
+                dot.classList.remove('online');
+                const lbl = dot.querySelector('.gateway-label');
+                if (lbl) lbl.textContent = 'Gateway Offline';
             }
         } catch { /* silent */ }
     }

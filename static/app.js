@@ -136,6 +136,7 @@ const App = (() => {
             $('#info-count').textContent = 'No list generated';
             $('#info-generated-at').textContent = '';
             $('#footer-count').textContent = '0 rows';
+            updateStatPills(0, 0);
             return;
         }
         $('#empty-state').classList.add('hidden');
@@ -144,7 +145,18 @@ const App = (() => {
         $('#info-generated-at').textContent = listMeta.generated_at
             ? `Generated: ${new Date(listMeta.generated_at).toLocaleString()}` : '';
         $('#footer-count').textContent = `${entries.length} rows`;
+        // Calculate due vs paid for stat pills
+        const dueCount = entries.filter(e => !e.status || e.status.trim() === '').length;
+        const paidCount = entries.length - dueCount;
+        updateStatPills(dueCount, paidCount);
         Spreadsheet.render(entries);
+    }
+
+    function updateStatPills(due, paid) {
+        const dueEl = $('#stat-due-val');
+        const paidEl = $('#stat-paid-val');
+        if (dueEl) dueEl.textContent = due;
+        if (paidEl) paidEl.textContent = paid;
     }
 
     // ── Load master data ──────────────────────────────────────────────
@@ -244,6 +256,8 @@ const App = (() => {
             const data = await api('GET', '/api/master/count');
             const n = data.count ?? 0;
             $('#master-count-badge').textContent = `${n} policies`;
+            const totalEl = $('#stat-total-val');
+            if (totalEl) totalEl.textContent = n;
         } catch { /* ignore */ }
     }
 
