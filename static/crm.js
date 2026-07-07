@@ -220,10 +220,11 @@ const CRM = (() => {
         // Always read from DOM (reflects edits + newly added rows)
         let entry = readEntryFromRow(tr);
 
-        // Fallback to cached state if DOM read failed
+        // Fallback to DataStore if DOM read failed
         if (!entry) {
             const entryId = parseInt(tr.dataset.entryId);
-            entry = App.state.entries?.find(en => en.id === entryId);
+            const entries = typeof App.getEntries === 'function' ? App.getEntries() : [];
+            entry = entries.find(en => (en._monthlyId || en.id) === entryId);
         }
         if (!entry) return;
 
@@ -234,7 +235,7 @@ const CRM = (() => {
         }
     }
 
-    /** Read entry fields from DOM cells when not in App.state.entries */
+    /** Read entry fields from DOM cells as fallback */
     function readEntryFromRow(tr) {
         const cells = tr.querySelectorAll('td');
         const getText = (cls) => {

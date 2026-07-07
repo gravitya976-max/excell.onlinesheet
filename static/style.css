@@ -253,7 +253,8 @@ mark.search-hl { background: #fef08a; color: inherit; padding: 0 1px; border-rad
 .search-hidden { display: none !important; }
 
 /* ══ Spreadsheet ════════════════════════════════════════════════════ */
-#spreadsheet-wrapper { flex: 1; overflow: auto; position: relative; }
+#spreadsheet-wrapper { flex: 1; overflow-x: auto; overflow-y: hidden; position: relative; }
+.scroll-container { overflow-y: auto; height: 100%; position: relative; }
 .spreadsheet { border-collapse: collapse; table-layout: fixed; font-size: 13px; }
 .spreadsheet thead { position: sticky; top: 0; z-index: 10; }
 .spreadsheet th { background: var(--bg-header-cell); color: var(--text-secondary); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 10px; border: 1px solid var(--border); border-top: none; text-align: center; vertical-align: middle; user-select: none; white-space: nowrap; position: relative; overflow: visible; }

@@ -1,17 +1,9 @@
 /* ══════════════════════════════════════════════════════════════════════
-   Online Sheet — Spreadsheet Rendering & Inline Editing (v2)
-
-   INTERACTIONS:
-     • Hover row + Ctrl+C            →  copy policy number
-     • Single RIGHT-CLICK on a cell  →  edit that cell
-     • Double LEFT-CLICK a header    →  rename the header
-
-   FEATURES:
-     • Master data is fully editable (except policy number)
-     • Policy number is selectable but never editable
-     • Undo stack: Ctrl+Z reverses edits one by one
-     • Event delegation for high performance
-     • Smooth rendering with DocumentFragment
+   Online Sheet — Spreadsheet v2 (Virtual Scroll + DataStore + Navigation)
+   
+   Merged: spreadsheet.js + navigation.js
+   Uses VirtualScroller for rendering only visible rows.
+   Uses DataStore as the data source — no local entry copies.
    ══════════════════════════════════════════════════════════════════════ */
 
 const Spreadsheet = (() => {
@@ -34,11 +26,12 @@ const Spreadsheet = (() => {
         COLUMNS.push({ key: `note${i}`, label: `Note ${i}`, editable: true, type: 'text' });
     }
 
-    const EXTRA_ROWS = 10;
     const STATUS_OPTIONS = ['', 'paid', 'autodebit', 'dailycollection', 'branchpaid'];
-    const STATUS_LABELS = { '': 'Due', 'paid': 'Paid', 'autodebit': 'Auto Debit', 'dailycollection': 'Daily Collection', 'branchpaid': 'Branch Paid' };
+    const STATUS_LABELS  = { '': 'Due', 'paid': 'Paid', 'autodebit': 'Auto Debit', 'dailycollection': 'Daily Collection', 'branchpaid': 'Branch Paid' };
+    const STATUS_KEYS    = { 'p': 'paid', 'a': 'autodebit', 'd': '', 'c': 'dailycollection', 'b': 'branchpaid' };
 
     let currentEditCell = null;
+    let _currentEntries = [];  // Current filtered view data
 
     /* ── Persisted settings ──────────────────────────────────────────── */
     const STORAGE_KEY_COL = 'os_col_widths';
@@ -50,6 +43,7 @@ const Spreadsheet = (() => {
     let colWidths = { ...DEFAULT_WIDTHS };
     let headerNames = {};
     let rowHeights = {};
+    let _colEls = {};
 
     function loadColWidths()   { try { const s = localStorage.getItem(STORAGE_KEY_COL); if (s) colWidths   = { ...DEFAULT_WIDTHS, ...JSON.parse(s) }; } catch {} }
     function saveColWidths()   { try { localStorage.setItem(STORAGE_KEY_COL, JSON.stringify(colWidths));   } catch {} }
@@ -59,12 +53,6 @@ const Spreadsheet = (() => {
     function saveRowHeights()  { try { localStorage.setItem(STORAGE_KEY_ROW, JSON.stringify(rowHeights));  } catch {} }
     function getHeaderLabel(col) { return headerNames[col.key] || col.label; }
 
-    let _colEls = {};
-
-    /* ── Sheet Cache ─────────────────────────────────────────────────── */
-    const _sheetCache = {};
-    let _currentSheetKey = null;
-
     /* ── Hovered row tracking (for Ctrl+C) ───────────────────────────── */
     let _hoveredRow = null;
 
@@ -73,158 +61,45 @@ const Spreadsheet = (() => {
     const MAX_UNDO = 100;
 
     function pushUndo(entryId, field, oldValue, newValue) {
-        _undoStack.push({
-            entryId,
-            field,
-            oldValue,
-            newValue,
-            tab: App.state.activeTab,
-            timestamp: Date.now(),
-        });
+        _undoStack.push({ entryId, field, oldValue, newValue, tab: App.state.activeTab, timestamp: Date.now() });
         if (_undoStack.length > MAX_UNDO) _undoStack.shift();
     }
 
     async function undo() {
         if (_undoStack.length === 0) {
-            if (typeof App !== 'undefined') App.toast('Nothing to undo', 'info', 1500);
+            App.toast('Nothing to undo', 'info', 1500);
             return;
         }
         const action = _undoStack.pop();
         const { entryId, field, oldValue, tab } = action;
-
-        // Call the appropriate API to revert
         let ok;
         if (tab === 'master') {
             ok = await App.updateMasterEntry(entryId, field, oldValue);
         } else {
             ok = await App.updateEntry(entryId, field, oldValue);
         }
-
         if (ok) {
-            // Update the cell in DOM if visible
+            // Update cell in DOM if visible
             const tr = document.querySelector(`tr[data-entry-id="${entryId}"]`);
             if (tr) {
                 const col = COLUMNS.find(c => c.key === field);
                 if (col) {
                     const td = tr.querySelector(`td[data-field="${field}"]`);
-                    if (td) {
-                        const entry = App.state.entries.find(e => e.id === entryId);
-                        if (entry) {
-                            entry[field] = oldValue;
-                            restoreCellDisplay(td, col, entry, oldValue);
-                        }
-                    }
+                    if (td) restoreCellDisplay(td, col, { [field]: oldValue }, oldValue);
                 }
             }
-            if (typeof App !== 'undefined') App.toast('↩ Undo done', 'success', 1500);
+            App.toast('↩ Undo done', 'success', 1500);
         }
     }
 
-    /* ── Colgroup ────────────────────────────────────────────────────── */
-    function buildColgroup() {
-        const table = document.getElementById('spreadsheet');
-        const old = table.querySelector('colgroup');
-        if (old) old.remove();
-        const isMaster = App.state.activeTab === 'master';
-        const activeCols = isMaster ? COLUMNS.filter(c => c.key !== 'status') : COLUMNS;
-        const colgroup = document.createElement('colgroup');
-        activeCols.forEach(col => {
-            const colEl = document.createElement('col');
-            colEl.style.width = colWidths[col.key] + 'px';
-            _colEls[col.key] = colEl;
-            colgroup.appendChild(colEl);
-        });
-        table.prepend(colgroup);
-        updateTableWidth();
-    }
-
-    function updateTableWidth() {
-        const table = document.getElementById('spreadsheet');
-        const isMaster = App.state.activeTab === 'master';
-        const activeCols = isMaster ? COLUMNS.filter(c => c.key !== 'status') : COLUMNS;
-        table.style.width = activeCols.reduce((s, c) => s + (colWidths[c.key] || 100), 0) + 'px';
-    }
-
-    /* ── Header ──────────────────────────────────────────────────────── */
-    function renderHeader() {
-        const headerRow = document.getElementById('header-row');
-        headerRow.innerHTML = '';
-        const isMaster = App.state.activeTab === 'master';
-        const activeCols = isMaster ? COLUMNS.filter(c => c.key !== 'status') : COLUMNS;
-        activeCols.forEach(col => {
-            const th = document.createElement('th');
-            th.className = `col-${col.key}`;
-            const labelSpan = document.createElement('span');
-            labelSpan.className = 'header-label';
-            labelSpan.textContent = getHeaderLabel(col);
-            th.appendChild(labelSpan);
-            th.addEventListener('dblclick', (e) => { e.stopPropagation(); startHeaderEdit(th, col, labelSpan); });
-            const handle = document.createElement('div');
-            handle.className = 'col-resize-handle';
-            handle.addEventListener('mousedown', (e) => startColResize(e, col.key));
-            th.appendChild(handle);
-            headerRow.appendChild(th);
-        });
-    }
-
-    function startHeaderEdit(th, col, labelSpan) {
-        if (th.querySelector('.header-input')) return;
-        const current = getHeaderLabel(col);
-        const input = document.createElement('input');
-        input.type = 'text'; input.className = 'header-input'; input.value = current;
-        labelSpan.style.display = 'none';
-        th.insertBefore(input, labelSpan);
-        input.focus(); input.select();
-        function save() {
-            const n = input.value.trim() || col.label;
-            headerNames[col.key] = n; saveHeaderNames();
-            labelSpan.textContent = n; labelSpan.style.display = ''; input.remove();
-            if (typeof App !== 'undefined') App.toast(`Header → "${n}"`, 'success', 1500);
-        }
-        input.addEventListener('blur', save);
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-            if (e.key === 'Escape') { input.value = current; input.blur(); }
-        });
-    }
-
-    /* ── Column resize ───────────────────────────────────────────────── */
-    function startColResize(e, colKey) {
-        e.preventDefault(); e.stopPropagation();
-        const colEl = _colEls[colKey]; if (!colEl) return;
-        const startX = e.clientX, startW = colWidths[colKey] || 100;
-        document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
-        const onMove = (ev) => { const w = Math.max(30, startW + ev.clientX - startX); colEl.style.width = w + 'px'; colWidths[colKey] = w; updateTableWidth(); };
-        const onUp = () => { saveColWidths(); document.body.style.cursor = ''; document.body.style.userSelect = ''; document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
-        document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
-    }
-
-    /* ── Row resize ──────────────────────────────────────────────────── */
-    function startRowResize(e, rowIdx, tr) {
-        e.preventDefault(); e.stopPropagation();
-        const startY = e.clientY, startH = tr.offsetHeight;
-        document.body.style.cursor = 'row-resize'; document.body.style.userSelect = 'none';
-        const onMove = (ev) => { const h = Math.max(24, startH + ev.clientY - startY); tr.style.height = h + 'px'; tr.querySelectorAll('td').forEach(td => td.style.height = h + 'px'); };
-        const onUp = () => {
-            rowHeights[rowIdx] = parseInt(tr.style.height) || 34;
-            saveRowHeights();
-            document.body.style.cursor = ''; document.body.style.userSelect = '';
-            document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
-        };
-        document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
-    }
-
-    /* ════════════════════════════════════════════════════════════════════
-       COPY POLICY NUMBER (called by Ctrl+C handler)
-       ════════════════════════════════════════════════════════════════════ */
+    /* ── Copy policy number ──────────────────────────────────────────── */
     function copyPolicyNo(tr) {
-        const pIdx = COLUMNS.findIndex(c => c.key === 'policyno');
+        const pIdx = getActiveCols().findIndex(c => c.key === 'policyno');
         if (pIdx === -1) return;
         const td = tr.children[pIdx];
         if (!td) return;
         const pno = (td.textContent || '').trim();
         if (!pno) return;
-
         if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(pno).then(() => showCopyFeedback(tr, pno)).catch(() => fallbackCopy(pno, tr));
         } else {
@@ -244,10 +119,10 @@ const Spreadsheet = (() => {
         document.querySelectorAll('tr.copied-row').forEach(r => r.classList.remove('copied-row'));
         tr.classList.add('copied-row');
         setTimeout(() => tr.classList.remove('copied-row'), 3000);
-        if (typeof App !== 'undefined') App.toast(`Copied: ${pno}`, 'success', 1500);
+        App.toast(`Copied: ${pno}`, 'success', 1500);
     }
 
-    // ── Extra (blank) editable rows — always 10 after real data ──────
+    /* ── Extra (blank) rows data ─────────────────────────────────────── */
     const extraRowData = {};
 
     function commitExtraRow(idx) {
@@ -260,8 +135,7 @@ const Spreadsheet = (() => {
         if (activeTab === 'master') {
             url = '/api/master/new';
         } else {
-            const s = App.state;
-            url = `/api/list/${s.year}/${s.month}/new`;
+            url = `/api/list/${App.state.year}/${App.state.month}/new`;
         }
 
         App.api('POST', url, { ...data, policyno: pno })
@@ -270,6 +144,7 @@ const Spreadsheet = (() => {
                 let msg = `✓ Policy ${pno} saved to ${label}`;
                 if (res.added_to_master) msg += ' + master data';
                 App.toast(msg, 'success', 4000);
+                delete extraRowData[idx];
                 App.reloadActive();
             })
             .catch(err => App.toast(`Save failed: ${err.message}`, 'error'));
@@ -282,136 +157,138 @@ const Spreadsheet = (() => {
         }
     }
 
+    /* ── Active columns helper ───────────────────────────────────────── */
+    function getActiveCols() {
+        return App.state.activeTab === 'master' ? COLUMNS.filter(c => c.key !== 'status') : COLUMNS;
+    }
+
+    /* ── Colgroup ────────────────────────────────────────────────────── */
+    function buildColgroup() {
+        const table = document.getElementById('spreadsheet');
+        const old = table.querySelector('colgroup');
+        if (old) old.remove();
+        const activeCols = getActiveCols();
+        const colgroup = document.createElement('colgroup');
+        activeCols.forEach(col => {
+            const colEl = document.createElement('col');
+            colEl.style.width = colWidths[col.key] + 'px';
+            _colEls[col.key] = colEl;
+            colgroup.appendChild(colEl);
+        });
+        table.prepend(colgroup);
+        table.style.width = activeCols.reduce((s, c) => s + (colWidths[c.key] || 100), 0) + 'px';
+    }
+
+    /* ── Header ──────────────────────────────────────────────────────── */
+    function renderHeader() {
+        const headerRow = document.getElementById('header-row');
+        headerRow.innerHTML = '';
+        getActiveCols().forEach(col => {
+            const th = document.createElement('th');
+            th.className = `col-${col.key}`;
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'header-label';
+            labelSpan.textContent = getHeaderLabel(col);
+            th.appendChild(labelSpan);
+            th.addEventListener('dblclick', (e) => { e.stopPropagation(); startHeaderEdit(th, col, labelSpan); });
+            const handle = document.createElement('div');
+            handle.className = 'col-resize-handle';
+            handle.addEventListener('mousedown', (e) => startColResize(e, col.key));
+            th.appendChild(handle);
+            headerRow.appendChild(th);
+        });
+    }
+
+    function startHeaderEdit(th, col, labelSpan) {
+        const input = document.createElement('input');
+        input.type = 'text'; input.className = 'header-edit-input';
+        input.value = getHeaderLabel(col);
+        input.addEventListener('blur', () => {
+            const val = input.value.trim();
+            if (val && val !== col.label) headerNames[col.key] = val;
+            else delete headerNames[col.key];
+            saveHeaderNames();
+            th.innerHTML = '';
+            labelSpan.textContent = getHeaderLabel(col);
+            th.appendChild(labelSpan);
+            const handle = document.createElement('div');
+            handle.className = 'col-resize-handle';
+            handle.addEventListener('mousedown', (e) => startColResize(e, col.key));
+            th.appendChild(handle);
+        });
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { input.value = getHeaderLabel(col); input.blur(); } });
+        th.innerHTML = '';
+        th.appendChild(input);
+        input.focus(); input.select();
+    }
+
+    /* ── Column resize ──────────────────────────────────────────────── */
+    function startColResize(e, key) {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startW = colWidths[key] || 100;
+        document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
+        const onMove = (ev) => {
+            const w = Math.max(30, startW + ev.clientX - startX);
+            colWidths[key] = w;
+            if (_colEls[key]) _colEls[key].style.width = w + 'px';
+            const table = document.getElementById('spreadsheet');
+            const activeCols = getActiveCols();
+            table.style.width = activeCols.reduce((s, c) => s + (colWidths[c.key] || 100), 0) + 'px';
+        };
+        const onUp = () => {
+            saveColWidths();
+            document.body.style.cursor = ''; document.body.style.userSelect = '';
+            document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+        };
+        document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    }
+
+    /* ── Row resize ─────────────────────────────────────────────────── */
+    function startRowResize(e, rowIdx, tr) {
+        e.preventDefault(); e.stopPropagation();
+        const startY = e.clientY;
+        const startH = tr.offsetHeight || 32;
+        document.body.style.cursor = 'row-resize'; document.body.style.userSelect = 'none';
+        const onMove = (ev) => {
+            const h = Math.max(24, startH + ev.clientY - startY);
+            tr.style.height = h + 'px';
+            tr.querySelectorAll('td').forEach(td => { td.style.height = h + 'px'; });
+            rowHeights[rowIdx] = h;
+        };
+        const onUp = () => {
+            saveRowHeights();
+            document.body.style.cursor = ''; document.body.style.userSelect = '';
+            document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+        };
+        document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    }
+
     /* ════════════════════════════════════════════════════════════════════
-       BUILD FRAGMENT — Create all rows off-screen in a DocumentFragment
+       ROW BUILDERS — used by VirtualScroller
        ════════════════════════════════════════════════════════════════════ */
-    function buildFragment(entries) {
-        const frag = document.createDocumentFragment();
+
+    function createDataRow(entry, idx) {
         const isMaster = App.state.activeTab === 'master';
-
-        entries.forEach((entry, idx) => frag.appendChild(createDataRow(entry, idx, isMaster)));
-
-        // Extra blank rows — navigable just like data rows
-        const extraActiveCols = isMaster ? COLUMNS.filter(c => c.key !== 'status') : COLUMNS;
-        for (let i = 0; i < EXTRA_ROWS; i++) {
-            const rowIdx = entries.length + i;
-            const extraIdx = i;
-            const tr = document.createElement('tr');
-            tr.className = 'extra-row';
-            tr.dataset.extraIdx = extraIdx;
-            if (rowHeights[rowIdx]) tr.style.height = rowHeights[rowIdx] + 'px';
-
-            extraActiveCols.forEach(col => {
-                const td = document.createElement('td');
-                td.className = `col-${col.key}`;
-                if (rowHeights[rowIdx]) td.style.height = rowHeights[rowIdx] + 'px';
-
-                if (col.type === 'index') {
-                    td.classList.add('locked', 'sn-delete');
-                    td.dataset.extraIdx = extraIdx;
-                    td.style.position = 'relative';
-                    td.style.cursor = 'pointer';
-                    const span = document.createElement('span');
-                    span.className = 'cell-content';
-                    span.textContent = entries.length + i + 1;
-                    td.appendChild(span);
-                    const rh = document.createElement('div');
-                    rh.className = 'row-resize-handle';
-                    rh.addEventListener('mousedown', (e) => startRowResize(e, rowIdx, tr));
-                    td.appendChild(rh);
-                } else {
-                    // All non-index cells are editable+selectable, just like data rows
-                    td.classList.add('editable');
-                    td.dataset.field = col.key;
-                    td.dataset.extraIdx = extraIdx;
-
-                    const span = document.createElement('span');
-                    span.className = 'cell-content';
-                    if (col.type === 'status') {
-                        const val = (extraRowData[extraIdx] || {})[col.key] || '';
-                        // Only show status label if a value was explicitly set
-                        if (val) {
-                            span.textContent = STATUS_LABELS[val] || val;
-                            addStatusClass(td, val);
-                        }
-                    } else {
-                        span.textContent = (extraRowData[extraIdx] || {})[col.key] || '';
-                    }
-                    td.appendChild(span);
-                }
-                tr.appendChild(td);
-            });
-            frag.appendChild(tr);
-        }
-
-        return frag;
-    }
-
-    /* ════════════════════════════════════════════════════════════════════
-       RENDER — The main entry point. Builds off-screen, swaps instantly.
-       ════════════════════════════════════════════════════════════════════ */
-    function render(entries, options = {}) {
-        const { sheetKey = 'default', animate = true } = options;
-
-        loadColWidths(); loadHeaderNames(); loadRowHeights();
-        buildColgroup(); renderHeader();
-
-        const tbody = document.getElementById('spreadsheet-body');
-
-        // Deselect any navigation before swapping
-        if (typeof Navigation !== 'undefined') Navigation.deselectCell();
-        closeActiveEdit();
-
-        // Clear extra row data when switching sheets
-        if (_currentSheetKey !== sheetKey) {
-            for (const k in extraRowData) delete extraRowData[k];
-        }
-
-        // Build the fragment (always fresh — entries may have changed)
-        const frag = buildFragment(entries);
-
-        // Instant swap: clear + append in one go (no blink)
-        tbody.innerHTML = '';
-        tbody.appendChild(frag);
-        _currentSheetKey = sheetKey;
-    }
-
-    /* ── Invalidate cache ────────────────────────────────────────────── */
-    function invalidateCache(sheetKey) {
-        if (sheetKey) {
-            delete _sheetCache[sheetKey];
-        } else {
-            for (const k in _sheetCache) delete _sheetCache[k];
-        }
-    }
-
-    function getCurrentSheetKey() {
-        return _currentSheetKey;
-    }
-
-    /* ════════════════════════════════════════════════════════════════════
-       CREATE DATA ROW
-       isMaster: when true, all fields (except policyno/sn) are editable
-       ════════════════════════════════════════════════════════════════════ */
-    function createDataRow(entry, idx, isMaster) {
         const tr = document.createElement('tr');
-        tr.dataset.entryId = entry.id;
+        // Use _monthlyId for monthly entries, or id for master entries
+        const entryId = entry._monthlyId || entry.id;
+        tr.dataset.entryId = entryId;
         if (rowHeights[idx]) tr.style.height = rowHeights[idx] + 'px';
 
-        // Determine which columns to render (skip status in master mode)
-        const activeCols = isMaster ? COLUMNS.filter(c => c.key !== 'status') : COLUMNS;
+        const activeCols = getActiveCols();
         activeCols.forEach(col => {
             const td = document.createElement('td');
             td.className = `col-${col.key}`;
-            if (rowHeights[idx]) td.style.height = rowHeights[idx] + 'px';
 
             if (col.type === 'index') {
                 td.classList.add('locked', 'sn-delete');
-                td.dataset.entryId = entry.id;
+                td.dataset.entryId = entryId;
                 td.style.position = 'relative';
                 td.style.cursor = 'pointer';
                 const span = document.createElement('span');
-                span.className = 'cell-content'; span.textContent = idx + 1;
+                span.className = 'cell-content';
+                span.textContent = idx + 1;
                 td.appendChild(span);
                 const rh = document.createElement('div');
                 rh.className = 'row-resize-handle';
@@ -419,46 +296,108 @@ const Spreadsheet = (() => {
                 td.appendChild(rh);
 
             } else if (col.key === 'policyno') {
-                // Policy number: SELECTABLE but NOT editable
-                // Use 'policyno-cell' class so Navigation can select it, but no edit
                 td.classList.add('locked', 'policyno-selectable');
                 td.dataset.field = col.key;
-                td.dataset.entryId = entry.id;
+                td.dataset.entryId = entryId;
                 const span = document.createElement('span');
                 span.className = 'cell-content';
                 span.textContent = entry.policyno || '';
                 td.appendChild(span);
 
             } else {
-                // All other columns: editable in BOTH master and monthly
                 td.classList.add('editable');
                 td.dataset.field = col.key;
-                td.dataset.entryId = entry.id;
+                td.dataset.entryId = entryId;
                 const value = entry[col.key] || '';
                 const span = document.createElement('span');
                 span.className = 'cell-content';
-                if (col.type === 'status') { span.textContent = STATUS_LABELS[value] || value || 'Due'; addStatusClass(td, value); }
-                else { span.textContent = value; }
+                if (col.type === 'status') {
+                    span.textContent = STATUS_LABELS[value] || value || 'Due';
+                    addStatusClass(td, value);
+                } else {
+                    span.textContent = value;
+                }
                 td.appendChild(span);
             }
-
             tr.appendChild(td);
         });
-
         return tr;
     }
 
-    /* ── Status keystroke map ───────────────────────────────────────────
-       p = Paid, a = Auto Debit, d = Due, c = Daily Collection, b = Branch Paid
-    ───────────────────────────────────────────────────────────────────── */
-    const STATUS_KEYS = {
-        'p': 'paid',
-        'a': 'autodebit',
-        'd': '',           // empty string = Due
-        'c': 'dailycollection',
-        'b': 'branchpaid',
-    };
+    function createExtraRow(extraIdx, snNumber) {
+        const tr = document.createElement('tr');
+        tr.className = 'extra-row';
+        tr.dataset.extraIdx = extraIdx;
 
+        const activeCols = getActiveCols();
+        activeCols.forEach(col => {
+            const td = document.createElement('td');
+            td.className = `col-${col.key}`;
+
+            if (col.type === 'index') {
+                td.classList.add('locked', 'sn-delete');
+                td.dataset.extraIdx = extraIdx;
+                td.style.position = 'relative';
+                td.style.cursor = 'pointer';
+                const span = document.createElement('span');
+                span.className = 'cell-content';
+                span.textContent = snNumber;
+                td.appendChild(span);
+            } else {
+                td.classList.add('editable');
+                td.dataset.field = col.key;
+                td.dataset.extraIdx = extraIdx;
+                const span = document.createElement('span');
+                span.className = 'cell-content';
+                if (col.type === 'status') {
+                    const val = (extraRowData[extraIdx] || {})[col.key] || '';
+                    if (val) {
+                        span.textContent = STATUS_LABELS[val] || val;
+                        addStatusClass(td, val);
+                    }
+                } else {
+                    span.textContent = (extraRowData[extraIdx] || {})[col.key] || '';
+                }
+                td.appendChild(span);
+            }
+            tr.appendChild(td);
+        });
+        return tr;
+    }
+
+    /* ════════════════════════════════════════════════════════════════════
+       RENDER — The main entry point. Uses VirtualScroller.
+       ════════════════════════════════════════════════════════════════════ */
+    let _vsInitialized = false;
+
+    function render(entries) {
+        loadColWidths(); loadHeaderNames(); loadRowHeights();
+        buildColgroup(); renderHeader();
+
+        // Deselect navigation
+        deselectCell();
+        closeActiveEdit();
+
+        _currentEntries = entries || [];
+
+        const tbody = document.getElementById('spreadsheet-body');
+        const scrollContainer = document.getElementById('scroll-container');
+
+        if (!_vsInitialized && scrollContainer) {
+            VirtualScroller.init(
+                scrollContainer,
+                tbody,
+                (rowData, rowIndex) => createDataRow(rowData, rowIndex),
+                (extraIdx, snNumber) => createExtraRow(extraIdx, snNumber)
+            );
+            _vsInitialized = true;
+        }
+
+        // Feed data to virtual scroller
+        VirtualScroller.setData(_currentEntries);
+    }
+
+    /* ── Status class helper ─────────────────────────────────────────── */
     function addStatusClass(td, value) {
         td.classList.remove('status-due', 'status-paid', 'status-autodebit', 'status-dailycollection', 'status-branchpaid');
         if (!value || value === '' || value === 'due') {
@@ -471,11 +410,10 @@ const Spreadsheet = (() => {
     /* ── Start editing ───────────────────────────────────────────────── */
     function startEdit(td, col, entry, initialKey) {
         if (col.type === 'status') return;
-
         td.classList.add('editing');
         td.innerHTML = '';
         currentEditCell = td;
-        if (typeof Navigation !== 'undefined') Navigation.setEditing(true);
+        _isEditing = true;
         createTextInput(td, entry[col.key] || '', entry, col, initialKey);
     }
 
@@ -488,9 +426,8 @@ const Spreadsheet = (() => {
         input.addEventListener('blur', () => {
             let nv = input.value.trim();
             finishEdit(td);
-            if (typeof Navigation !== 'undefined') Navigation.setEditing(false);
+            _isEditing = false;
 
-            // Auto date-tag ONLY when the cell was empty before
             if (isNote && nv && !value) {
                 const now = new Date();
                 const dd = String(now.getDate()).padStart(2, '0');
@@ -499,19 +436,19 @@ const Spreadsheet = (() => {
             }
 
             if (nv !== value) {
-                // Push to undo stack BEFORE saving
-                pushUndo(entry.id, col.key, value, nv);
+                const entryId = parseInt(td.dataset.entryId);
+                pushUndo(entryId, col.key, value, nv);
                 entry[col.key] = nv;
-                saveCell(td, entry.id, col.key, nv);
+                saveCell(td, entryId, col.key, nv);
             }
             restoreCellDisplay(td, col, entry, nv);
-            if (typeof Navigation !== 'undefined') Navigation.selectCell(td);
+            selectCell(td);
         });
 
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') input.blur();
             else if (e.key === 'Escape') { input.value = value; input.blur(); }
-            else if (e.key === 'Tab') { e.preventDefault(); input.blur(); moveToNextEditable(td, col, entry, e.shiftKey); }
+            else if (e.key === 'Tab') { e.preventDefault(); input.blur(); }
         });
 
         td.appendChild(input); input.focus();
@@ -532,7 +469,7 @@ const Spreadsheet = (() => {
         td.appendChild(span);
     }
 
-    /* ── Save cell: routes to correct API based on active tab ─────── */
+    /* ── Save cell ───────────────────────────────────────────────────── */
     async function saveCell(td, entryId, field, value) {
         td.classList.add('saving'); td.classList.remove('saved');
         let ok;
@@ -547,7 +484,7 @@ const Spreadsheet = (() => {
 
     /* ── Extra row editing ─────────────────────────────────────────── */
     function isExtraCell(td) {
-        return td && td.dataset.extraIdx !== undefined;
+        return td && td.dataset.extraIdx !== undefined && !td.dataset.entryId;
     }
 
     function startExtraEdit(td, initialKey) {
@@ -555,14 +492,12 @@ const Spreadsheet = (() => {
         const field = td.dataset.field;
         const col = COLUMNS.find(c => c.key === field);
         if (!col || isNaN(extraIdx)) return;
-
-        // Status cells in extra rows: use keystroke
         if (col.type === 'status') return;
 
         td.classList.add('editing');
         td.innerHTML = '';
         currentEditCell = td;
-        if (typeof Navigation !== 'undefined') Navigation.setEditing(true);
+        _isEditing = true;
 
         const oldValue = (extraRowData[extraIdx] || {})[field] || '';
         const input = document.createElement('input');
@@ -572,29 +507,23 @@ const Spreadsheet = (() => {
         input.addEventListener('blur', () => {
             const val = input.value.trim();
             finishEdit(td);
-            if (typeof Navigation !== 'undefined') Navigation.setEditing(false);
+            _isEditing = false;
 
             if (!extraRowData[extraIdx]) extraRowData[extraIdx] = {};
             extraRowData[extraIdx][field] = val;
 
-            // Restore cell display
             td.innerHTML = '';
             const span = document.createElement('span');
             span.className = 'cell-content';
             if (col.type === 'status') {
-                if (val) {
-                    span.textContent = STATUS_LABELS[val] || val;
-                    addStatusClass(td, val);
-                }
+                if (val) { span.textContent = STATUS_LABELS[val] || val; addStatusClass(td, val); }
             } else {
                 span.textContent = val;
             }
             td.appendChild(span);
 
-            // Auto-commit when policy number is filled
             if (field === 'policyno' && val) commitExtraRow(extraIdx);
-
-            if (typeof Navigation !== 'undefined') Navigation.selectCell(td);
+            selectCell(td);
         });
 
         input.addEventListener('keydown', (e) => {
@@ -603,28 +532,213 @@ const Spreadsheet = (() => {
         });
 
         td.appendChild(input); input.focus();
-        if (initialKey) {
-            input.setSelectionRange(input.value.length, input.value.length);
-        } else {
-            input.select();
-        }
+        if (initialKey) { input.setSelectionRange(input.value.length, input.value.length); }
+        else { input.select(); }
     }
 
     function getExtraRowData() { return extraRowData; }
 
-    function moveToNextEditable(currentTd, currentCol, currentEntry, reverse) {
-        const tr = currentTd.closest('tr');
-        const tds = Array.from(tr.querySelectorAll('td.editable'));
-        const idx = tds.indexOf(currentTd);
-        if (idx === -1) return;
-        const next = reverse ? idx - 1 : idx + 1;
-        if (next < 0 || next >= tds.length) return;
-        const nextTd = tds[next];
-        const field = nextTd.dataset.field;
+    /* ════════════════════════════════════════════════════════════════════
+       NAVIGATION (merged from navigation.js)
+       ════════════════════════════════════════════════════════════════════ */
+    let _selectedCell = null;
+    let _lastDirection = 'down';
+    let _isEditing = false;
+
+    function isSelectableCell(td) {
+        return td && (td.classList.contains('editable') || td.classList.contains('policyno-selectable'));
+    }
+    function isEditableCell(td) { return td && td.classList.contains('editable'); }
+    function isStatusCell(td) { return td && td.classList.contains('col-status'); }
+    function isPolicyNoCell(td) { return td && td.classList.contains('policyno-selectable'); }
+
+    function getCellPos(td) {
+        const tr = td.closest('tr');
+        if (!tr) return null;
+        const tbody = tr.closest('tbody');
+        if (!tbody) return null;
+        // Filter out spacer rows for position calculation
+        const rows = Array.from(tbody.rows).filter(r => !r.classList.contains('vs-pad-top') && !r.classList.contains('vs-pad-bottom'));
+        const rowIdx = rows.indexOf(tr);
+        const colIdx = Array.from(tr.cells).indexOf(td);
+        return { row: rowIdx, col: colIdx };
+    }
+
+    function getCellAt(row, col) {
+        const tbody = document.getElementById('spreadsheet-body');
+        if (!tbody) return null;
+        const rows = Array.from(tbody.rows).filter(r => !r.classList.contains('vs-pad-top') && !r.classList.contains('vs-pad-bottom'));
+        const tr = rows[row];
+        if (!tr) return null;
+        return tr.cells[col] || null;
+    }
+
+    function getGridSize() {
+        const tbody = document.getElementById('spreadsheet-body');
+        if (!tbody || !tbody.rows.length) return { rows: 0, cols: 0 };
+        const rows = Array.from(tbody.rows).filter(r => !r.classList.contains('vs-pad-top') && !r.classList.contains('vs-pad-bottom'));
+        if (!rows.length) return { rows: 0, cols: 0 };
+        return { rows: rows.length, cols: rows[0].cells.length };
+    }
+
+    function selectCell(td) {
+        if (_selectedCell === td) return;
+        deselectCell();
+        if (!td || !isSelectableCell(td)) return;
+        _selectedCell = td;
+        td.classList.add('nav-selected');
+        td.setAttribute('tabindex', '0');
+        td.focus();
+        const tr = td.closest('tr');
+        if (tr) tr.classList.add('nav-active-row');
+        const table = td.closest('.spreadsheet');
+        if (table) table.classList.add('nav-has-selection');
+    }
+
+    function deselectCell() {
+        if (_selectedCell) {
+            const tr = _selectedCell.closest('tr');
+            if (tr) tr.classList.remove('nav-active-row');
+            const table = _selectedCell.closest('.spreadsheet');
+            if (table) table.classList.remove('nav-has-selection');
+            _selectedCell.classList.remove('nav-selected');
+            _selectedCell.removeAttribute('tabindex');
+            _selectedCell = null;
+        }
+        _isEditing = false;
+    }
+
+    function move(direction) {
+        if (!_selectedCell) return;
+        const pos = getCellPos(_selectedCell);
+        if (!pos) return;
+        const grid = getGridSize();
+        let newRow = pos.row, newCol = pos.col;
+        switch (direction) {
+            case 'up':    newRow = Math.max(0, pos.row - 1); break;
+            case 'down':  newRow = Math.min(grid.rows - 1, pos.row + 1); break;
+            case 'left':  newCol = Math.max(0, pos.col - 1); break;
+            case 'right': newCol = Math.min(grid.cols - 1, pos.col + 1); break;
+        }
+        let td = getCellAt(newRow, newCol);
+        const maxTries = Math.max(grid.rows, grid.cols);
+        let tries = 0;
+        while (td && !isSelectableCell(td) && tries < maxTries) {
+            switch (direction) {
+                case 'up':    newRow--; break;
+                case 'down':  newRow++; break;
+                case 'left':  newCol--; break;
+                case 'right': newCol++; break;
+            }
+            if (newRow < 0 || newRow >= grid.rows || newCol < 0 || newCol >= grid.cols) break;
+            td = getCellAt(newRow, newCol);
+            tries++;
+        }
+        if (td && isSelectableCell(td)) {
+            _lastDirection = direction;
+            selectCell(td);
+        }
+    }
+
+    function getCellInfo(td) {
+        const field = td.dataset.field;
+        const entryId = td.dataset.entryId;
+        if (!field || !entryId) return null;
         const col = COLUMNS.find(c => c.key === field);
-        const entryId = parseInt(tr.dataset.entryId);
-        const entry = App.state.entries.find(e => e.id === entryId);
-        if (entry && col) startEdit(nextTd, col, entry);
+        const entry = _currentEntries.find(e => (e._monthlyId || e.id) === parseInt(entryId));
+        if (!col || !entry) return null;
+        return { col, entry };
+    }
+
+    function applyStatusKey(td, key) {
+        const info = getCellInfo(td);
+        if (!info) return;
+        const { col, entry } = info;
+        const newVal = STATUS_KEYS[key];
+        const oldVal = entry[col.key] || '';
+
+        if (newVal !== oldVal) {
+            const entryId = parseInt(td.dataset.entryId);
+            pushUndo(entryId, col.key, oldVal, newVal);
+            entry[col.key] = newVal;
+            saveCell(td, entryId, col.key, newVal);
+        }
+        restoreCellDisplay(td, col, entry, newVal);
+        addStatusClass(td, newVal);
+        td.classList.add('nav-selected');
+        td.setAttribute('tabindex', '0');
+        td.focus();
+    }
+
+    /* ── Keyboard handler ──────────────────────────────────────────────── */
+    function onKeyDown(e) {
+        // Ctrl+Z
+        if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !_isEditing) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+            e.preventDefault(); undo(); return;
+        }
+        // Ctrl+C
+        if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+            if (_hoveredRow) { e.preventDefault(); copyPolicyNo(_hoveredRow); return; }
+            if (_selectedCell) {
+                e.preventDefault();
+                const tr = _selectedCell.closest('tr');
+                if (tr) copyPolicyNo(tr);
+                return;
+            }
+        }
+        if (_isEditing) return;
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+        if (!_selectedCell) return;
+
+        const key = e.key;
+        if (key === 'ArrowUp')    { e.preventDefault(); move('up'); return; }
+        if (key === 'ArrowDown')  { e.preventDefault(); move('down'); return; }
+        if (key === 'ArrowLeft')  { e.preventDefault(); move('left'); return; }
+        if (key === 'ArrowRight') { e.preventDefault(); move('right'); return; }
+        if (key === 'Tab') { e.preventDefault(); move(e.shiftKey ? 'left' : 'right'); return; }
+        if (key === 'Enter') { e.preventDefault(); move(_lastDirection); return; }
+        if (key === 'Escape') { e.preventDefault(); deselectCell(); return; }
+
+        if (isPolicyNoCell(_selectedCell)) return;
+
+        // Status shortcuts
+        if (isStatusCell(_selectedCell)) {
+            const lk = key.toLowerCase();
+            if (lk in STATUS_KEYS) {
+                e.preventDefault();
+                if (isExtraCell(_selectedCell)) {
+                    const extraIdx = parseInt(_selectedCell.dataset.extraIdx);
+                    if (!extraRowData[extraIdx]) extraRowData[extraIdx] = {};
+                    extraRowData[extraIdx]['status'] = STATUS_KEYS[lk];
+                    const col = COLUMNS.find(c => c.key === 'status');
+                    const val = STATUS_KEYS[lk];
+                    restoreCellDisplay(_selectedCell, col, { status: val }, val);
+                    addStatusClass(_selectedCell, val);
+                    _selectedCell.classList.add('nav-selected');
+                    _selectedCell.setAttribute('tabindex', '0');
+                    _selectedCell.focus();
+                } else {
+                    applyStatusKey(_selectedCell, lk);
+                }
+                return;
+            }
+        }
+
+        // Printable key → start editing
+        if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            if (!isStatusCell(_selectedCell) && isEditableCell(_selectedCell)) {
+                e.preventDefault();
+                _isEditing = true;
+                if (isExtraCell(_selectedCell)) {
+                    startExtraEdit(_selectedCell, key);
+                } else {
+                    const info = getCellInfo(_selectedCell);
+                    if (info) startEdit(_selectedCell, info.col, info.entry, key);
+                }
+            }
+        }
     }
 
     /* ════════════════════════════════════════════════════════════════════
@@ -634,48 +748,45 @@ const Spreadsheet = (() => {
         const tbody = document.getElementById('spreadsheet-body');
         if (!tbody) return;
 
-        // Right-click → edit cell (delegated — works for both data rows and extra rows)
+        // Click → select cell
+        tbody.addEventListener('click', (e) => {
+            const td = e.target.closest('td.editable, td.policyno-selectable');
+            if (td) {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+                selectCell(td);
+            }
+        });
+
+        // Right-click → edit
         tbody.addEventListener('contextmenu', (e) => {
             const td = e.target.closest('td.editable');
             if (!td) return;
             e.preventDefault();
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
             if (td.classList.contains('editing')) return;
-
             closeActiveEdit();
-
-            // Check if this is an extra row cell
-            if (isExtraCell(td)) {
-                startExtraEdit(td);
-                return;
-            }
-
-            // Regular data row
+            if (isExtraCell(td)) { startExtraEdit(td); return; }
             const field = td.dataset.field;
             const entryId = parseInt(td.dataset.entryId);
             const col = COLUMNS.find(c => c.key === field);
-            const entry = App.state.entries.find(en => en.id === entryId);
+            const entry = _currentEntries.find(en => (en._monthlyId || en.id) === entryId);
             if (col && entry) startEdit(td, col, entry);
         });
 
-        // Click SN cell → delete row with confirmation
+        // Click SN → delete row
         tbody.addEventListener('click', (e) => {
             const snTd = e.target.closest('td.sn-delete');
             if (!snTd) return;
 
-            // Extra row: clear the extra row data
-            if (snTd.dataset.extraIdx !== undefined) {
+            // Extra row: clear
+            if (snTd.dataset.extraIdx !== undefined && !snTd.dataset.entryId) {
                 const extraIdx = parseInt(snTd.dataset.extraIdx);
                 const data = extraRowData[extraIdx];
                 if (data && Object.keys(data).some(k => data[k])) {
-                    // Has data — clear it
                     delete extraRowData[extraIdx];
                     const tr = snTd.closest('tr.extra-row');
                     if (tr) {
-                        tr.querySelectorAll('td.editable .cell-content').forEach(span => {
-                            span.textContent = '';
-                        });
-                        // Clear status class
+                        tr.querySelectorAll('td.editable .cell-content').forEach(span => { span.textContent = ''; });
                         tr.querySelectorAll('td.col-status').forEach(td => {
                             td.className = td.className.replace(/status-\w+/g, '').trim();
                         });
@@ -689,7 +800,7 @@ const Spreadsheet = (() => {
             const tr = snTd.closest('tr[data-entry-id]');
             if (!tr) return;
             const entryId = parseInt(tr.dataset.entryId);
-            const entry = App.state.entries.find(en => en.id === entryId);
+            const entry = _currentEntries.find(en => (en._monthlyId || en.id) === entryId);
             if (!entry) return;
 
             const pno = entry.policyno || 'Unknown';
@@ -697,28 +808,34 @@ const Spreadsheet = (() => {
             App.showConfirm(
                 `Delete row?`,
                 `Policy: ${pno}${name ? ' — ' + name : ''}\nThis will permanently remove this entry.`,
-                async () => {
-                    await App.deleteEntry(entryId);
-                }
+                async () => { await App.deleteEntry(entryId); }
             );
         });
 
-        // Hover tracking for Ctrl+C (both data and extra rows)
+        // Hover tracking
         tbody.addEventListener('mouseover', (e) => {
             const tr = e.target.closest('tr');
-            if (tr) _hoveredRow = tr;
+            if (tr && !tr.classList.contains('vs-pad-top') && !tr.classList.contains('vs-pad-bottom')) {
+                _hoveredRow = tr;
+            }
         });
-        tbody.addEventListener('mouseleave', () => {
-            _hoveredRow = null;
+        tbody.addEventListener('mouseleave', () => { _hoveredRow = null; });
+
+        // Global keyboard
+        document.addEventListener('keydown', onKeyDown);
+
+        // Click outside → deselect
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.spreadsheet')) deselectCell();
+        });
+
+        // Close edit on click outside
+        document.addEventListener('mousedown', (e) => {
+            if (!currentEditCell) return;
+            if (currentEditCell.contains(e.target)) return;
+            closeActiveEdit();
         });
     }
-
-    /* ── Close edit when clicking outside ─────────────────────────── */
-    document.addEventListener('mousedown', (e) => {
-        if (!currentEditCell) return;
-        if (currentEditCell.contains(e.target)) return;
-        closeActiveEdit();
-    });
 
     /* ── Init delegation once DOM ready ──────────────────────────── */
     document.addEventListener('DOMContentLoaded', initDelegation);
@@ -743,12 +860,11 @@ const Spreadsheet = (() => {
     }
     startClock();
 
+    /* ── Public API ────────────────────────────────────────────────── */
     return {
         render,
-        invalidateCache,
-        getCurrentSheetKey,
         COLUMNS,
-        // Exposed for Navigation module
+        // Cell operations (for undo etc.)
         _saveCell: saveCell,
         _restoreCell: restoreCellDisplay,
         _addStatusClass: addStatusClass,
@@ -760,6 +876,9 @@ const Spreadsheet = (() => {
         // Undo
         undo,
         pushUndo,
+        // Navigation
+        selectCell,
+        deselectCell,
         // Hover tracking
         getHoveredRow: () => _hoveredRow,
         copyPolicyNo,

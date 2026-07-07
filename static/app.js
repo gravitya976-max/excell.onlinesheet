@@ -1,27 +1,16 @@
 /* ══════════════════════════════════════════════════════════════════════
-   Online Sheet — Core App Logic
-   Inline search: filters the active tab's table rows in place.
+   Online Sheet — Core App Logic (v2)
+   Uses DataStore as single source of truth.
+   Initial load fetches current view, then bulk-loads everything in background.
+   Tab/month switching is instant — no API calls after bulk load.
    ══════════════════════════════════════════════════════════════════════ */
 
 const App = (() => {
     const state = {
         year: new Date().getFullYear(),
         month: new Date().getMonth() + 1,
-        entries: [],
-        _allEntries: [],   // full backup used by search filter
-        listMeta: null,
         activeTab: 'list',
     };
-
-    // ── Client-side list cache for instant month switching ─────────
-    const _listCache = {};  // key: 'year/month' → { entries, list }
-    function cacheKey(y, m) { return `${y}/${m}`; }
-    function getCached(y, m) { return _listCache[cacheKey(y, m)] || null; }
-    function setCache(y, m, data) { _listCache[cacheKey(y, m)] = data; }
-
-    // ── Sheet keys for Spreadsheet component ──────────────────────
-    function listSheetKey(y, m) { return `list/${y}/${m}`; }
-    const MASTER_SHEET_KEY = 'master';
 
     const MONTH_NAMES = [
         '', 'January', 'February', 'March', 'April', 'May', 'June',
@@ -74,20 +63,20 @@ const App = (() => {
     function prevMonth() {
         state.month--;
         if (state.month < 1) { state.month = 12; state.year--; }
-        updateMonthLabel(); loadListFast();
+        updateMonthLabel();
+        renderCurrentView();
     }
     function nextMonth() {
         state.month++;
         if (state.month > 12) { state.month = 1; state.year++; }
-        updateMonthLabel(); loadListFast();
+        updateMonthLabel();
+        renderCurrentView();
     }
 
     // ── Tabs ──────────────────────────────────────────────────────────
     function switchTab(tab) {
-        if (state.activeTab === tab) return; // already on this tab
+        if (state.activeTab === tab) return;
         state.activeTab = tab;
-
-        // Clear search when switching tabs
         clearSearchInput();
 
         document.querySelectorAll('.tab').forEach(t => {
@@ -103,78 +92,74 @@ const App = (() => {
             $('#month-controls').classList.remove('hidden');
             $('#master-info').classList.add('hidden');
             $('#btn-generate').classList.remove('hidden');
-            loadListFast();
         } else {
             $('#month-controls').classList.add('hidden');
             $('#master-info').classList.remove('hidden');
             $('#btn-generate').classList.add('hidden');
-            loadMasterData();
         }
+        renderCurrentView();
     }
 
-    // ── Load monthly list ─────────────────────────────────────────────
-    function loadListFast() {
-        const sheetKey = listSheetKey(state.year, state.month);
-
-        // Show cached data instantly, then refresh in background
-        const cached = getCached(state.year, state.month);
-        if (cached) {
-            state.entries = cached.entries || [];
-            state._allEntries = [...state.entries];
-            state.listMeta = cached.list;
-            renderList(sheetKey);
-            applyFilter($('#search-input').value);
-        }
-        // Always fetch fresh data (silently updates if changed)
-        loadList(!cached, sheetKey);  // show skeleton only if no cache
-    }
-
-    async function loadList(showSkeleton = true, sheetKey = null) {
-        const sk = sheetKey || listSheetKey(state.year, state.month);
-        try {
-            if (showSkeleton) {
-                $('#info-count').textContent = 'Loading...';
+    // ── Render current view (instant from DataStore) ──────────────────
+    function renderCurrentView() {
+        const entries = getEntries();
+        
+        if (state.activeTab === 'list') {
+            const meta = DataStore.getMonthMeta(state.year, state.month);
+            if (!meta && entries.length === 0) {
+                // No list generated for this month — check if we need to fetch
+                if (DataStore.isBulkLoaded() || DataStore.hasMonthData(state.year, state.month)) {
+                    showEmptyState();
+                } else {
+                    // Not yet loaded — fetch this month
+                    fetchMonthData(state.year, state.month);
+                }
+                return;
             }
-            const data = await api('GET', `/api/list/${state.year}/${state.month}`);
-            // Cache the result
-            setCache(state.year, state.month, data);
-            state.entries = data.entries || [];
-            state._allEntries = [...state.entries];
-            state.listMeta = data.list;
-            // Only re-render if we're still viewing this month's list tab
-            if (state.activeTab === 'list' && listSheetKey(state.year, state.month) === sk) {
-                renderList(sk);
-                applyFilter($('#search-input').value);
-            }
-        } catch (e) { toast(`Load failed: ${e.message}`, 'error'); }
+            showListState(entries, meta);
+        } else {
+            showMasterState(entries);
+        }
+
+        Spreadsheet.render(entries);
+        applyFilter($('#search-input').value);
     }
 
-    function renderList(sheetKey) {
-        const sk = sheetKey || listSheetKey(state.year, state.month);
-        const { entries, listMeta } = state;
-        if (!listMeta || entries.length === 0) {
-            $('#empty-state').classList.remove('hidden');
-            $('#spreadsheet').classList.add('hidden');
-            $('#info-count').textContent = 'No list generated';
-            $('#info-generated-at').textContent = '';
-            $('#footer-count').textContent = '0 rows';
-            updateStatPills(0, 0, 0);
-            return;
-        }
+    function getEntries() {
+        return DataStore.getView(state.activeTab, state.year, state.month);
+    }
+
+    function showEmptyState() {
+        $('#empty-state').classList.remove('hidden');
+        $('#spreadsheet').classList.add('hidden');
+        $('#info-count').textContent = 'No list generated';
+        $('#info-generated-at').textContent = '';
+        $('#footer-count').textContent = '0 rows';
+        updateStatPills(0, 0, 0);
+    }
+
+    function showListState(entries, meta) {
         $('#empty-state').classList.add('hidden');
         $('#spreadsheet').classList.remove('hidden');
         $('#info-count').textContent = `${entries.length} policies`;
-        $('#info-generated-at').textContent = listMeta.generated_at
-            ? `Generated: ${new Date(listMeta.generated_at).toLocaleString()}` : '';
+        $('#info-generated-at').textContent = meta && meta.generated_at
+            ? `Generated: ${new Date(meta.generated_at).toLocaleString()}` : '';
         $('#footer-count').textContent = `${entries.length} rows`;
-        // Calculate due vs paid for stat pills
         const dueCount = entries.filter(e => {
             const s = (e.status || '').trim().toLowerCase();
             return s === '' || s === 'due';
         }).length;
-        const paidCount = entries.length - dueCount;
-        updateStatPills(entries.length, dueCount, paidCount);
-        Spreadsheet.render(entries, { sheetKey: sk, animate: true });
+        updateStatPills(entries.length, dueCount, entries.length - dueCount);
+    }
+
+    function showMasterState(entries) {
+        $('#empty-state').classList.add('hidden');
+        $('#spreadsheet').classList.remove('hidden');
+        const total = DataStore.getPolicyCount();
+        $('#master-count-badge').textContent = `${total} policies`;
+        $('#info-count').textContent = `${total} master policies`;
+        $('#info-generated-at').textContent = '';
+        $('#footer-count').textContent = `${total} rows`;
     }
 
     function updateStatPills(total, due, paid) {
@@ -186,21 +171,16 @@ const App = (() => {
         if (paidEl) paidEl.textContent = paid;
     }
 
-    // ── Load master data ──────────────────────────────────────────────
-    async function loadMasterData() {
+    // ── Fetch individual month (fallback if not in bulk cache) ────────
+    async function fetchMonthData(year, month) {
         try {
-            const data = await api('GET', '/api/master?limit=5000');
-            state.entries = data.data || [];
-            state._allEntries = [...state.entries];
-            const total = data.total || 0;
-            $('#master-count-badge').textContent = `${total} policies`;
-            $('#empty-state').classList.add('hidden');
-            $('#spreadsheet').classList.remove('hidden');
-            $('#info-count').textContent = `${total} master policies`;
-            $('#info-generated-at').textContent = '';
-            $('#footer-count').textContent = `${total} rows`;
-            Spreadsheet.render(state.entries, { sheetKey: MASTER_SHEET_KEY, animate: true });
-            applyFilter($('#search-input').value);
+            $('#info-count').textContent = 'Loading...';
+            const data = await api('GET', `/api/list/${year}/${month}`);
+            DataStore.setMonthlyData(year, month, data.entries || [], data.list);
+            // Only render if still viewing this month
+            if (state.activeTab === 'list' && state.year === year && state.month === month) {
+                renderCurrentView();
+            }
         } catch (e) { toast(`Load failed: ${e.message}`, 'error'); }
     }
 
@@ -210,232 +190,103 @@ const App = (() => {
         try {
             const data = await api('POST', `/api/generate?year=${state.year}&month=${state.month}`);
             toast(`List generated: ${data.filtered_count} policies due`, 'success');
-            // Invalidate caches for this month and reload
-            delete _listCache[cacheKey(state.year, state.month)];
-            Spreadsheet.invalidateCache(listSheetKey(state.year, state.month));
-            await loadList();
+            // Re-fetch this month's data to update DataStore
+            const freshData = await api('GET', `/api/list/${state.year}/${state.month}`);
+            DataStore.setMonthlyData(state.year, state.month, freshData.entries || [], freshData.list);
+            renderCurrentView();
         } catch (e) { toast(`Generate failed: ${e.message}`, 'error'); }
-        finally { hideLoading(); }
+        hideLoading();
     }
 
-    // ── Update entry ──────────────────────────────────────────────────
-    async function updateEntry(entryId, field, value) {
-        const syncEl = $('#footer-sync');
-        syncEl.textContent = 'Saving...';
-        syncEl.className = 'sync-indicator syncing';
-        try {
-            await api('PUT', `/api/entry/${entryId}`, { [field]: value });
-            // Invalidate cache since data changed
-            delete _listCache[cacheKey(state.year, state.month)];
-            // Update local state so stats recalculate instantly
-            const entry = state.entries.find(e => e.id === entryId);
-            if (entry) {
-                entry[field] = value;
-                // Also update _allEntries
-                const allEntry = state._allEntries.find(e => e.id === entryId);
-                if (allEntry) allEntry[field] = value;
-            }
-            recalcStats();
-            syncEl.textContent = '✓ Saved';
-            syncEl.className = 'sync-indicator synced';
-            setTimeout(() => { syncEl.textContent = ''; syncEl.className = 'sync-indicator'; }, 3000);
-            return true;
-        } catch (e) {
-            syncEl.textContent = '✗ Save failed';
-            syncEl.className = 'sync-indicator error';
-            toast(`Save failed: ${e.message}`, 'error');
-            setTimeout(() => { syncEl.textContent = ''; syncEl.className = 'sync-indicator'; }, 3000);
-            return false;
-        }
-    }
-
-    // ── Update master entry ────────────────────────────────────────────
-    async function updateMasterEntry(entryId, field, value) {
-        const syncEl = $('#footer-sync');
-        syncEl.textContent = 'Saving...';
-        syncEl.className = 'sync-indicator syncing';
-        try {
-            await api('PUT', `/api/master/${entryId}`, { [field]: value });
-            // Update local state
-            const entry = state.entries.find(e => e.id === entryId);
-            if (entry) {
-                entry[field] = value;
-                const allEntry = state._allEntries.find(e => e.id === entryId);
-                if (allEntry) allEntry[field] = value;
-            }
-            syncEl.textContent = '✓ Saved';
-            syncEl.className = 'sync-indicator synced';
-            setTimeout(() => { syncEl.textContent = ''; syncEl.className = 'sync-indicator'; }, 3000);
-            return true;
-        } catch (e) {
-            syncEl.textContent = '✗ Save failed';
-            syncEl.className = 'sync-indicator error';
-            toast(`Save failed: ${e.message}`, 'error');
-            setTimeout(() => { syncEl.textContent = ''; syncEl.className = 'sync-indicator'; }, 3000);
-            return false;
-        }
-    }
-
-    function recalcStats() {
-        const entries = state._allEntries || state.entries;
-        const total = entries.length;
-        const due = entries.filter(e => {
-            const s = (e.status || '').trim().toLowerCase();
-            return s === '' || s === 'due';
-        }).length;
-        const paid = total - due;
-        updateStatPills(total, due, paid);
-    }
-
-    // ── Upload modal ──────────────────────────────────────────────────
-    function openUpload() {
-        $('#upload-overlay').classList.remove('hidden');
-        $('#upload-result').classList.add('hidden');
-    }
-    function closeUpload() { $('#upload-overlay').classList.add('hidden'); }
-
-    async function handleFiles(fileList) {
-        if (!fileList.length) return;
-        const resultEl = $('#upload-result');
-        resultEl.classList.remove('hidden', 'success', 'failure');
-        resultEl.textContent = `Uploading ${fileList.length} file(s)...`;
-        resultEl.className = 'test-result';
-
-        const fd = new FormData();
-        for (const f of fileList) fd.append('files', f);
-
-        showLoading(`Processing ${fileList.length} file(s)...`);
-        try {
-            const resp = await fetch('/api/upload', { method: 'POST', body: fd });
-            if (!resp.ok) { const text = await resp.text(); throw new Error(text); }
-            const data = await resp.json();
-            const msg = `✓ ${data.files_processed} file(s) processed. ` +
-                `${data.total_inserted} new, ${data.total_updated} enriched. ` +
-                `${data.total_records} records parsed.`;
-            resultEl.className = 'test-result success';
-            resultEl.textContent = msg;
-            toast(msg, 'success', 5000);
-            if (data.errors && data.errors.length)
-                data.errors.forEach(e => toast(`${e.file}: ${e.error}`, 'error', 5000));
-            // Invalidate master sheet cache after upload
-            Spreadsheet.invalidateCache(MASTER_SHEET_KEY);
-            await refreshMasterCount();
-        } catch (e) {
-            resultEl.className = 'test-result failure';
-            resultEl.textContent = `✗ Upload failed: ${e.message}`;
-            toast(`Upload failed: ${e.message}`, 'error');
-        } finally { hideLoading(); }
-    }
-
-    // ── Master count badge ────────────────────────────────────────────
-    async function refreshMasterCount() {
-        try {
-            const data = await api('GET', '/api/master/count');
-            const n = data.count ?? 0;
-            $('#master-count-badge').textContent = `${n} policies`;
-            const totalEl = $('#stat-total-val');
-            if (totalEl) totalEl.textContent = n;
-        } catch { /* ignore */ }
-    }
-
-    // ── Confirm dialog ────────────────────────────────────────────────
-    function showConfirm(title, message, onOk) {
-        const overlay = $('#confirm-overlay');
-        $('#confirm-title').textContent = title;
-        $('#confirm-message').textContent = message;
-        overlay.classList.remove('hidden');
-        const okBtn = $('#btn-confirm-ok');
-        const cancelBtn = $('#btn-confirm-cancel');
-        const cleanup = () => {
-            overlay.classList.add('hidden');
-            okBtn.replaceWith(okBtn.cloneNode(true));
-            cancelBtn.replaceWith(cancelBtn.cloneNode(true));
-        };
-        $('#btn-confirm-ok').addEventListener('click', () => { cleanup(); onOk(); }, { once: true });
-        $('#btn-confirm-cancel').addEventListener('click', cleanup, { once: true });
-    }
-
-    // ── Search — inline row filter (active tab) ───────────────────────
+    // ── Search / filter ───────────────────────────────────────────────
     let _searchTimer = null;
+    let _filterText = '';
 
-    function escapeHtml(str) {
-        const d = document.createElement('div');
-        d.textContent = str || '';
-        return d.innerHTML;
+    function doSearch(query) {
+        _filterText = (query || '').trim().toLowerCase();
+        applyFilter(_filterText);
     }
 
-    function highlightMatch(text, query) {
-        if (!query || !text) return escapeHtml(text || '');
-        const q = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        return escapeHtml(text).replace(new RegExp(`(${q})`, 'gi'), '<mark class="search-hl">$1</mark>');
-    }
-
-    function applyFilter(query) {
-        const q = query.trim().toLowerCase();
-        const allRows = document.querySelectorAll('#spreadsheet-body tr:not(.extra-row)');
-        const total = state._allEntries.length;
-        const label = state.activeTab === 'list' ? 'policies' : 'master policies';
-
-        if (!q) {
-            // Restore all rows with plain text
-            allRows.forEach(tr => {
-                tr.classList.remove('search-hidden');
-                tr.querySelectorAll('.cell-content').forEach(span => {
-                    if (span.dataset.raw !== undefined) {
-                        span.textContent = span.dataset.raw;
-                        delete span.dataset.raw;
-                    }
-                });
-            });
-            $('#info-count').textContent = `${total} ${label}`;
-            $('#footer-count').textContent = `${total} rows`;
+    function applyFilter(text) {
+        _filterText = (text || '').trim().toLowerCase();
+        if (!_filterText) {
+            // No filter — render full view
+            Spreadsheet.render(getEntries());
             return;
         }
-
-        let visible = 0;
-        allRows.forEach(tr => {
-            const spans = tr.querySelectorAll('.cell-content');
-            // Read raw text for matching (use data-raw if already set)
-            const texts = Array.from(spans).map(s => (s.dataset.raw ?? s.textContent).toLowerCase());
-            const matches = texts.some(t => t.includes(q));
-
-            if (matches) {
-                tr.classList.remove('search-hidden');
-                visible++;
-                spans.forEach(span => {
-                    const raw = span.dataset.raw ?? span.textContent;
-                    if (!span.dataset.raw) span.dataset.raw = raw;
-                    span.innerHTML = highlightMatch(raw, q);
-                });
-            } else {
-                tr.classList.add('search-hidden');
-                spans.forEach(span => {
-                    if (!span.dataset.raw) span.dataset.raw = span.textContent;
-                });
-            }
+        const all = getEntries();
+        const filtered = all.filter(entry => {
+            return Object.values(entry).some(v =>
+                v != null && String(v).toLowerCase().includes(_filterText)
+            );
         });
-
-        $('#info-count').textContent = `${visible} of ${total} ${label}`;
-        $('#footer-count').textContent = `${visible} rows`;
+        Spreadsheet.render(filtered);
     }
 
     function clearSearchInput() {
         const inp = $('#search-input');
         if (inp) inp.value = '';
-        const clr = $('#search-clear');
-        if (clr) clr.classList.add('hidden');
-    }
-
-    function doSearch(query) {
-        $('#search-clear').classList.toggle('hidden', !query.trim());
-        applyFilter(query);
+        _filterText = '';
     }
 
     function clearSearch() {
         clearSearchInput();
         applyFilter('');
     }
-    // ── Confirm dialog (uses existing #confirm-overlay modal) ──────────
+
+    // ── Update entry (monthly) ────────────────────────────────────────
+    async function updateEntry(entryId, field, value) {
+        try {
+            await api('PUT', `/api/entry/${entryId}`, { [field]: value });
+            // Find the policyno for this entry to update DataStore
+            const entries = getEntries();
+            const entry = entries.find(e => (e._monthlyId || e.id) === entryId);
+            if (entry) {
+                const monthKey = `${state.year}-${state.month}`;
+                DataStore.updateField('monthly', entry.policyno || entry._masterPolicyno, field, value, monthKey, entryId);
+            }
+            return true;
+        } catch (e) {
+            toast(`Update failed: ${e.message}`, 'error');
+            return false;
+        }
+    }
+
+    // ── Update master entry ───────────────────────────────────────────
+    async function updateMasterEntry(entryId, field, value) {
+        try {
+            await api('PUT', `/api/master/${entryId}`, { [field]: value });
+            // Update DataStore
+            const entries = getEntries();
+            const entry = entries.find(e => e.id === entryId);
+            if (entry) {
+                DataStore.updateField('master', entry.policyno, field, value);
+            }
+            return true;
+        } catch (e) {
+            toast(`Update failed: ${e.message}`, 'error');
+            return false;
+        }
+    }
+
+    // ── Delete entry ──────────────────────────────────────────────────
+    async function deleteEntry(entryId) {
+        const table = state.activeTab === 'master' ? 'master' : 'monthly';
+        try {
+            const res = await api('DELETE', `/api/entry/${entryId}?table=${table}`);
+            const pno = res.policyno;
+            if (pno) DataStore.removeEntry(pno);
+            toast(`Deleted: ${pno}`, 'success', 2000);
+            renderCurrentView();
+            refreshMasterCount();
+            return true;
+        } catch (e) {
+            toast(`Delete failed: ${e.message}`, 'error');
+            return false;
+        }
+    }
+
+    // ── Confirm dialog ────────────────────────────────────────────────
     let _confirmCallback = null;
     function showConfirm(title, message, onConfirm) {
         const overlay = $('#confirm-overlay');
@@ -445,75 +296,93 @@ const App = (() => {
         _confirmCallback = onConfirm;
         overlay.classList.remove('hidden');
     }
-    document.addEventListener('DOMContentLoaded', () => {
-        const overlay = $('#confirm-overlay');
-        if (!overlay) return;
-        $('#btn-confirm-ok')?.addEventListener('click', () => {
-            overlay.classList.add('hidden');
-            if (_confirmCallback) { _confirmCallback(); _confirmCallback = null; }
-        });
-        $('#btn-confirm-cancel')?.addEventListener('click', () => {
-            overlay.classList.add('hidden');
-            _confirmCallback = null;
-        });
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) { overlay.classList.add('hidden'); _confirmCallback = null; }
-        });
-    });
 
-    // ── Delete an entry ───────────────────────────────────────────────
-    async function deleteEntry(entryId) {
-        const table = state.activeTab === 'master' ? 'master' : 'monthly';
+    // ── Upload ────────────────────────────────────────────────────────
+    function openUpload() { $('#upload-overlay').classList.remove('hidden'); }
+    function closeUpload() { $('#upload-overlay').classList.add('hidden'); }
+
+    async function handleFiles(fileList) {
+        if (!fileList || fileList.length === 0) return;
+        showLoading(`Uploading ${fileList.length} file(s)...`);
+        const fd = new FormData();
+        for (const f of fileList) fd.append('files', f);
         try {
-            const res = await api('DELETE', `/api/entry/${entryId}?table=${table}`);
-            toast(`Deleted policy ${res.policyno}`, 'success', 3000);
-            // Remove from local state
-            state.entries = state.entries.filter(e => e.id !== entryId);
-            state._allEntries = state._allEntries.filter(e => e.id !== entryId);
-            // Re-render
-            reloadActive();
-            return true;
+            const res = await api('POST', '/api/upload');
+            // Actually we need FormData upload, not JSON
+            const resp = await fetch('/api/upload', { method: 'POST', body: fd });
+            if (!resp.ok) throw new Error(await resp.text());
+            const data = await resp.json();
+            toast(`Uploaded: ${data.total_inserted} new, ${data.total_updated} updated`, 'success');
+            closeUpload();
+            // Reload master data in DataStore
+            await refreshBulkData();
+            renderCurrentView();
+        } catch (e) { toast(`Upload failed: ${e.message}`, 'error'); }
+        hideLoading();
+    }
+
+    // ── Reload active view (called after new entry from extra row) ───
+    async function reloadActive() {
+        if (state.activeTab === 'master') {
+            const data = await api('GET', '/api/master?limit=5000');
+            DataStore.setMasterData(data.data || []);
+        } else {
+            const data = await api('GET', `/api/list/${state.year}/${state.month}`);
+            DataStore.setMonthlyData(state.year, state.month, data.entries || [], data.list);
+        }
+        renderCurrentView();
+        refreshMasterCount();
+    }
+
+    // ── Background bulk load ──────────────────────────────────────────
+    async function refreshBulkData() {
+        try {
+            const data = await api('GET', '/api/session/bulk');
+            DataStore.loadInitialData(
+                data.policies,
+                null, null, null  // don't overwrite current month
+            );
+            DataStore.loadBulkData(data.monthlyData, data.availableMonths);
         } catch (e) {
-            toast(`Delete failed: ${e.message}`, 'error');
-            return false;
+            console.warn('Bulk load failed:', e.message);
         }
     }
 
-    // ── Reload active tab (called after new entry saved from empty row) ──
-    function reloadActive() {
-        if (state.activeTab === 'master') {
-            Spreadsheet.invalidateCache(MASTER_SHEET_KEY);
-            loadMasterData();
-        } else {
-            Spreadsheet.invalidateCache(listSheetKey(state.year, state.month));
-            delete _listCache[cacheKey(state.year, state.month)];
-            loadList();
-        }
+    // ── Refresh master count badge ────────────────────────────────────
+    async function refreshMasterCount() {
+        try {
+            const data = await api('GET', '/api/master/count');
+            const badge = $('#master-count-badge');
+            if (badge) badge.textContent = `${data.count} policies`;
+        } catch {}
     }
 
     // ── Init ──────────────────────────────────────────────────────────
     function init() {
         updateMonthLabel();
 
+        // Month nav
         $('#btn-prev-month').addEventListener('click', prevMonth);
         $('#btn-next-month').addEventListener('click', nextMonth);
 
+        // Generate
         $('#btn-generate').addEventListener('click', () => {
             showConfirm('Generate List?',
                 `This will create/replace the due list for ${MONTH_NAMES[state.month]} ${state.year} from master data.`,
                 generateList);
         });
 
+        // Tabs
         document.querySelectorAll('.tab').forEach(t =>
             t.addEventListener('click', () => switchTab(t.dataset.tab))
         );
 
+        // Upload
         $('#btn-upload').addEventListener('click', openUpload);
         $('#btn-close-upload').addEventListener('click', closeUpload);
         $('#upload-overlay').addEventListener('click', (e) => {
             if (e.target === e.currentTarget) closeUpload();
         });
-
         const dz = $('#drop-zone');
         const fi = $('#file-input');
         dz.addEventListener('click', () => fi.click());
@@ -525,7 +394,7 @@ const App = (() => {
             handleFiles(e.dataTransfer.files);
         });
 
-        // Search: debounced inline filter
+        // Search
         $('#search-input').addEventListener('input', (e) => {
             clearTimeout(_searchTimer);
             _searchTimer = setTimeout(() => doSearch(e.target.value), 200);
@@ -535,10 +404,56 @@ const App = (() => {
             if (e.key === 'Escape') clearSearch();
         });
 
-        refreshMasterCount();
-        loadList();
+        // Confirm modal buttons
+        const overlay = $('#confirm-overlay');
+        if (overlay) {
+            $('#btn-confirm-ok')?.addEventListener('click', () => {
+                overlay.classList.add('hidden');
+                if (_confirmCallback) { _confirmCallback(); _confirmCallback = null; }
+            });
+            $('#btn-confirm-cancel')?.addEventListener('click', () => {
+                overlay.classList.add('hidden');
+                _confirmCallback = null;
+            });
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) { overlay.classList.add('hidden'); _confirmCallback = null; }
+            });
+        }
+
+        // ── Initial data load strategy ──────────────────────────────
+        // 1. Try localStorage cache (instant)
+        // 2. Fetch current view from API
+        // 3. Background bulk load everything else
+
+        const hasCached = DataStore.loadFromLocal();
+        if (hasCached) {
+            // Instant render from cache
+            refreshMasterCount();
+            renderCurrentView();
+            toast('Loaded from cache', 'info', 1500);
+        }
+
+        // Always fetch fresh current view
+        fetchMonthData(state.year, state.month).then(() => {
+            refreshMasterCount();
+        });
+
+        // Background: bulk load all data
+        setTimeout(() => refreshBulkData(), hasCached ? 3000 : 500);
     }
 
     document.addEventListener('DOMContentLoaded', init);
-    return { state, updateEntry, updateMasterEntry, deleteEntry, toast, api, reloadActive, showConfirm };
+
+    return {
+        state,
+        updateEntry,
+        updateMasterEntry,
+        deleteEntry,
+        toast,
+        api,
+        reloadActive,
+        showConfirm,
+        renderCurrentView,
+        getEntries,
+    };
 })();

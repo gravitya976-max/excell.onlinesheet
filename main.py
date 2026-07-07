@@ -461,6 +461,49 @@ def clear_master(confirm: str = Query(...)):
     return {"message": "All master data deleted."}
 
 
+# ── Bulk session data (one-shot download for DataStore) ────────────────────────
+
+@app.get("/api/session/bulk")
+def session_bulk():
+    """Return ALL master data + ALL monthly overlays in one response.
+    Called once in the background to fully populate the client DataStore."""
+    import math as _math
+
+    def safe(obj):
+        if isinstance(obj, float) and (_math.isnan(obj) or _math.isinf(obj)):
+            return None
+        raise TypeError
+
+    with get_db() as conn:
+        # All master policies
+        master_rows = conn.execute("SELECT * FROM master_policies ORDER BY id DESC").fetchall()
+        policies = [dict(r) for r in master_rows]
+
+        # All monthly lists + their entries
+        months = conn.execute(
+            "SELECT * FROM monthly_lists ORDER BY year DESC, month DESC"
+        ).fetchall()
+
+        monthly_data = {}
+        for m in months:
+            entries = conn.execute(
+                "SELECT * FROM monthly_entries WHERE list_id=? ORDER BY fup_day ASC, id ASC",
+                (m["id"],)
+            ).fetchall()
+            key = f"{m['year']}-{m['month']}"
+            monthly_data[key] = {
+                "meta": dict(m),
+                "entries": [dict(e) for e in entries]
+            }
+
+    result = {
+        "policies": policies,
+        "monthlyData": monthly_data,
+        "availableMonths": [dict(m) for m in months],
+    }
+    return JSONResponse(json.loads(json.dumps(result, default=safe, allow_nan=False)))
+
+
 # ── Delete a single entry (master or monthly) ─────────────────────────────────
 
 @app.delete("/api/entry/{entry_id}")
