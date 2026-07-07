@@ -487,7 +487,7 @@ def session_bulk():
         monthly_data = {}
         for m in months:
             entries = conn.execute(
-                "SELECT * FROM monthly_entries WHERE list_id=? ORDER BY fup_day ASC, id ASC",
+                "SELECT * FROM monthly_entries WHERE list_id=? ORDER BY CASE WHEN fup_day IS NULL OR fup_day = 0 THEN 1 ELSE 0 END, fup_day ASC, id ASC",
                 (m["id"],)
             ).fetchall()
             key = f"{m['year']}-{m['month']}"
@@ -674,7 +674,7 @@ def get_monthly_list(year: int, month: int):
         if not meta:
             return {"list": None, "entries": []}
         entries = conn.execute(
-            "SELECT * FROM monthly_entries WHERE list_id=? ORDER BY fup_day ASC, id ASC",
+            "SELECT * FROM monthly_entries WHERE list_id=? ORDER BY CASE WHEN fup_day IS NULL OR fup_day = 0 THEN 1 ELSE 0 END, fup_day ASC, id ASC",
             (meta["id"],)
         ).fetchall()
 

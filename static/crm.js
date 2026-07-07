@@ -19,6 +19,8 @@ const CRM = (() => {
     let gatewayTimer = null;
     let gatewayOnline = false;  // tracks whether SMS/call gateway is reachable
     let activeTab = 'select'; // 'select' | 'history'
+    let _historyCache = null;  // cached history HTML for instant tab switch
+    let _queueCache = null;    // cached queue HTML for instant load
 
     // ── DOM refs ──────────────────────────────────────────────────────
     const $  = (s) => document.querySelector(s);
@@ -32,7 +34,7 @@ const CRM = (() => {
         $('#crm-queue-btn')?.addEventListener('click', () => toggleQueue());
 
         // Floating box controls
-        $('#crm-clear-all')?.addEventListener('click', clearAll);
+        $('#crm-clear-all')?.addEventListener('click', closeAndDeselect);
 
         // Tab buttons
         $('#crm-tab-select')?.addEventListener('click', () => switchTab('select'));
@@ -65,6 +67,11 @@ const CRM = (() => {
         $('#crm-tab-history')?.classList.toggle('active', tab === 'history');
 
         if (tab === 'history') {
+            // Show cache instantly, refresh in background
+            if (_historyCache) {
+                const list = $('#crm-float-list');
+                if (list) list.innerHTML = _historyCache;
+            }
             loadHistory();
             $('#crm-float-footer').style.display = 'none';
             $('#crm-clear-all').style.display = 'none';
@@ -98,6 +105,7 @@ const CRM = (() => {
             });
 
             list.innerHTML = '';
+            // Will cache the final HTML below
 
             if (all.length === 0) {
                 list.innerHTML = '<div style="text-align:center;padding:30px;color:#8b92a5;font-size:12px">No history yet</div>';
@@ -145,6 +153,8 @@ const CRM = (() => {
                     list.appendChild(div);
                 });
             });
+            // Cache the built HTML for instant re-show
+            _historyCache = list.innerHTML;
         } catch (err) {
             list.innerHTML = `<div style="text-align:center;padding:20px;color:#d04040;font-size:12px">Failed to load</div>`;
         }
@@ -192,18 +202,48 @@ const CRM = (() => {
         updateModeUI();
     }
 
+    /** Close float box and deselect active CRM mode entirely */
+    function closeAndDeselect() {
+        clearAll();
+        // Deselect current mode
+        mode = null;
+        queueOpen = false;
+        if (queueRefreshTimer) { clearInterval(queueRefreshTimer); queueRefreshTimer = null; }
+        updateModeUI();
+        $('#crm-float-box')?.classList.remove('visible');
+    }
+
     function updateModeUI() {
         const smsBtn = $('#crm-sms-btn');
         const callBtn = $('#crm-call-btn');
-        smsBtn?.classList.remove('active-sms');
-        callBtn?.classList.remove('active-call');
-
-        if (mode === 'sms') smsBtn?.classList.add('active-sms');
-        if (mode === 'call') callBtn?.classList.add('active-call');
         const queueBtn = $('#crm-queue-btn');
-        queueBtn?.classList.remove('active-queue');
 
-        if (mode !== 'sms') {
+        // Remove all active states + close badges
+        [smsBtn, callBtn, queueBtn].forEach(btn => {
+            if (!btn) return;
+            btn.classList.remove('active-sms', 'active-call', 'active-queue');
+            const oldX = btn.querySelector('.crm-close-x');
+            if (oldX) oldX.remove();
+        });
+
+        // Add active state + ✕ badge
+        const addCloseBadge = (btn) => {
+            if (!btn) return;
+            const x = document.createElement('span');
+            x.className = 'crm-close-x';
+            x.textContent = '✕';
+            x.addEventListener('click', (e) => {
+                e.stopPropagation();
+                closeAndDeselect();
+            });
+            btn.appendChild(x);
+        };
+
+        if (mode === 'sms') { smsBtn?.classList.add('active-sms'); addCloseBadge(smsBtn); }
+        if (mode === 'call') { callBtn?.classList.add('active-call'); addCloseBadge(callBtn); }
+        if (queueOpen) { queueBtn?.classList.add('active-queue'); addCloseBadge(queueBtn); }
+
+        if (mode !== 'sms' && !queueOpen) {
             $('#crm-float-box')?.classList.remove('visible');
         }
     }
@@ -631,11 +671,27 @@ const CRM = (() => {
             mode = null;
             updateModeUI();
             btn?.classList.add('active-queue');
+            // Add close badge to queue btn
+            const oldX = btn?.querySelector('.crm-close-x');
+            if (!oldX && btn) {
+                const x = document.createElement('span');
+                x.className = 'crm-close-x';
+                x.textContent = '✕';
+                x.addEventListener('click', (e) => { e.stopPropagation(); closeAndDeselect(); });
+                btn.appendChild(x);
+            }
             box?.classList.add('visible');
+            // Show cache instantly, refresh in background
+            if (_queueCache) {
+                const list = $('#crm-float-list');
+                if (list) list.innerHTML = _queueCache;
+            }
             loadQueueView();
             queueRefreshTimer = setInterval(loadQueueView, 5000);
         } else {
             btn?.classList.remove('active-queue');
+            const oldX2 = btn?.querySelector('.crm-close-x');
+            if (oldX2) oldX2.remove();
             box?.classList.remove('visible');
             if (queueRefreshTimer) { clearInterval(queueRefreshTimer); queueRefreshTimer = null; }
         }
@@ -734,6 +790,8 @@ const CRM = (() => {
             } else if (footer) {
                 footer.innerHTML = '';
             }
+            // Cache queue HTML for instant re-show
+            if (list) _queueCache = list.innerHTML;
         } catch (err) {
             if (list) list.innerHTML = '<div style="text-align:center;padding:20px;color:#d04040;font-size:12px">Failed to load queue</div>';
         }

@@ -419,21 +419,58 @@ const Spreadsheet = (() => {
 
     function createTextInput(td, value, entry, col, initialKey) {
         const isNote = col.key.startsWith('note');
+        // Regex to detect date prefix: "DD/MM - " at the start
+        const DATE_PREFIX_RE = /^(\d{2}\/\d{2})\s*-\s*/;
+        let datePrefix = '';  // e.g. "07/07 - "
+        let textPart = value; // the editable portion
+
+        if (isNote && value) {
+            const m = value.match(DATE_PREFIX_RE);
+            if (m) {
+                datePrefix = m[1] + ' - ';  // normalize to "DD/MM - "
+                textPart = value.slice(m[0].length);
+            }
+        }
+
+        // If note cell is empty and user starts typing, generate today's prefix
+        let autoPrefix = '';
+        if (isNote && !value && initialKey) {
+            const now = new Date();
+            const dd = String(now.getDate()).padStart(2, '0');
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            autoPrefix = `${dd}/${mm} - `;
+        }
+
+        // Build the cell: [locked date prefix] [input]
+        if (datePrefix || autoPrefix) {
+            const prefixSpan = document.createElement('span');
+            prefixSpan.className = 'note-date-prefix';
+            prefixSpan.textContent = datePrefix || autoPrefix;
+            td.appendChild(prefixSpan);
+        }
+
         const input = document.createElement('input');
         input.type = 'text'; input.className = 'cell-input';
-        input.value = initialKey || value;
+        if (datePrefix || autoPrefix) {
+            input.classList.add('has-prefix');
+        }
+        input.value = initialKey || textPart;
+
+        const effectivePrefix = datePrefix || autoPrefix;
 
         input.addEventListener('blur', () => {
             let nv = input.value.trim();
             finishEdit(td);
             _isEditing = false;
 
-            if (isNote && nv && !value) {
-                const now = new Date();
-                const dd = String(now.getDate()).padStart(2, '0');
-                const mm = String(now.getMonth() + 1).padStart(2, '0');
-                nv = `${dd}/${mm} - ${nv}`;
+            // Recombine: prefix + edited text
+            if (effectivePrefix && nv) {
+                nv = effectivePrefix + nv;
+            } else if (effectivePrefix && !nv) {
+                // User cleared the text — save empty (removes the date too)
+                nv = '';
             }
+            // No prefix and no value → stays empty, no date added
 
             if (nv !== value) {
                 const entryId = parseInt(td.dataset.entryId);
@@ -447,7 +484,7 @@ const Spreadsheet = (() => {
 
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') input.blur();
-            else if (e.key === 'Escape') { input.value = value; input.blur(); }
+            else if (e.key === 'Escape') { input.value = textPart; input.blur(); }
             else if (e.key === 'Tab') { e.preventDefault(); input.blur(); }
         });
 

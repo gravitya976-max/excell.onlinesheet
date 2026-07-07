@@ -9,8 +9,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=70">
-    <link rel="stylesheet" href="/static/crm.css?v=70">
+    <link rel="stylesheet" href="/static/style.css?v=71">
+    <link rel="stylesheet" href="/static/crm.css?v=71">
 </head>
 <body>
     <!-- Row 1: Main header -->
@@ -26,7 +26,7 @@
                 </svg>
                 <div>
                     <div class="brand-name">Online Sheet</div>
-                    <div class="brand-version">Version 2.0.0</div>
+                    <div class="brand-version">Version 2.1.0</div>
                 </div>
             </div>
             <nav class="tabs">
@@ -39,6 +39,9 @@
                 <button id="btn-prev-month" class="month-nav" title="Previous month">‹</button>
                 <span id="current-month-label" class="month-badge">July 2026</span>
                 <button id="btn-next-month" class="month-nav" title="Next month">›</button>
+                <!-- Split hitbox: left half = prev, right half = next -->
+                <div id="hit-prev" class="month-hit month-hit-left" title="Previous month"></div>
+                <div id="hit-next" class="month-hit month-hit-right" title="Next month"></div>
             </div>
             <div id="master-info" class="master-info hidden">
                 <span id="master-count-badge" class="action-btn" style="cursor:default">0 policies</span>
@@ -71,7 +74,7 @@
                     <line x1="8" y1="13" x2="16" y2="13" />
                     <line x1="8" y1="17" x2="16" y2="17" />
                 </svg>
-                Total Policies <span id="stat-total-val" class="stat-val"></span>
+                Total Policies <span id="stat-total-val" class="stat-val">&mdash;</span>
             </div>
             <div class="stat stat-due">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -82,7 +85,7 @@
                     <circle cx="12" cy="16" r="3" />
                     <polyline points="12 14.5 12 16 13 17" />
                 </svg>
-                Due <span id="stat-due-val" class="stat-val"></span>
+                Due <span id="stat-due-val" class="stat-val">&mdash;</span>
             </div>
             <div class="stat stat-paid">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -90,7 +93,7 @@
                     <polyline points="14 2 14 8 20 8" />
                     <polyline points="9 15 11 17 15 12" />
                 </svg>
-                Paid <span id="stat-paid-val" class="stat-val"></span>
+                Paid <span id="stat-paid-val" class="stat-val">&mdash;</span>
             </div>
         </div>
 
@@ -144,7 +147,7 @@
             <p>Upload data sheets first, then click <strong>"Generate List"</strong> to create this month's due list.</p>
         </div>
         <div id="scroll-container" class="scroll-container">
-            <table id="spreadsheet" class="spreadsheet hidden">
+            <table id="spreadsheet" class="spreadsheet">
                 <thead><tr id="header-row"></tr></thead>
                 <tbody id="spreadsheet-body"></tbody>
             </table>
@@ -203,11 +206,11 @@
     <!-- Toast Container -->
     <div id="toast-container"></div>
 
-    <script src="/static/datastore.js?v=70"></script>
-    <script src="/static/virtual-scroller.js?v=70"></script>
-    <script src="/static/app.js?v=70"></script>
-    <script src="/static/spreadsheet.js?v=70"></script>
-    <script src="/static/crm.js?v=70"></script>
+    <script src="/static/datastore.js?v=71"></script>
+    <script src="/static/virtual-scroller.js?v=71"></script>
+    <script src="/static/app.js?v=71"></script>
+    <script src="/static/spreadsheet.js?v=71"></script>
+    <script src="/static/crm.js?v=71"></script>
 
     <!-- CRM: Floating Selection Box -->
     <div id="crm-float-box" class="crm-float-box">

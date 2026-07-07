@@ -89,20 +89,29 @@ body { display: flex; flex-direction: column; }
     display: flex; align-items: center;
     background: var(--green); border-radius: 8px;
     overflow: hidden; flex-shrink: 0;
+    position: relative;
 }
 .month-badge {
     background: transparent; color: #fff;
     font-size: 14px; font-weight: 700;
     padding: 8px 14px;
     white-space: nowrap; font-family: var(--font-sans);
+    pointer-events: none;
 }
 .month-nav {
     background: transparent; color: rgba(255,255,255,0.85);
     border: none; cursor: pointer; font-size: 16px; font-weight: 700;
     padding: 8px 10px; line-height: 1;
     transition: all var(--transition);
+    pointer-events: none;
 }
 .month-nav:hover { background: rgba(0,0,0,0.12); color: #fff; }
+.month-hit { position: absolute; top: 0; bottom: 0; width: 50%; cursor: pointer; z-index: 2; }
+.month-hit-left { left: 0; }
+.month-hit-right { right: 0; }
+.month-hit:hover ~ .month-nav { }
+.month-hit-left:hover { background: rgba(0,0,0,0.08); border-radius: 8px 0 0 8px; }
+.month-hit-right:hover { background: rgba(0,0,0,0.08); border-radius: 0 8px 8px 0; }
 .header-right > .month-badge { background: var(--green); border-radius: 8px; }
 
 /* Action buttons */
@@ -149,7 +158,7 @@ body { display: flex; flex-direction: column; }
 .stat-total { color: var(--green-dark); }
 .stat-due { color: var(--red); }
 .stat-paid { color: var(--green-dark); }
-.stat-val { margin-left: 2px; }
+.stat-val { margin-left: 2px; min-width: 20px; display: inline-block; }
 
 /* Search */
 .search {
@@ -197,6 +206,7 @@ body { display: flex; flex-direction: column; }
     border: none; border-radius: 6px;
     color: var(--green-dark); cursor: pointer;
     transition: all var(--transition);
+    position: relative;
 }
 .gateway-btn:hover { background: rgba(22,163,74,0.12); }
 .gateway-btn svg { width: 20px; height: 20px; }
@@ -206,6 +216,23 @@ body { display: flex; flex-direction: column; }
 .gateway-btn.active-queue {
     background: rgba(22,163,74,0.18);
     color: var(--green-dark);
+}
+/* Close badge on active CRM pills */
+.crm-close-x {
+    position: absolute; top: -4px; right: -4px;
+    width: 16px; height: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 700;
+    background: #e2e8f0; color: #64748b;
+    border-radius: 50%;
+    cursor: pointer;
+    line-height: 1;
+    transition: all 0.15s ease;
+    z-index: 5;
+}
+.crm-close-x:hover {
+    background: #fecaca; color: #dc2626;
+    transform: scale(1.15);
 }
 
 /* Date / time — two-line: big time on top, date below */
@@ -248,14 +275,29 @@ body { display: flex; flex-direction: column; }
 }
 .icon-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
 
+/* ══ Monthly pastel header colors (no yellow) ═══════════════════════ */
+.spreadsheet[data-month="1"]  th { background: #fce4ec; } /* Jan — soft rose */
+.spreadsheet[data-month="2"]  th { background: #e8eaf6; } /* Feb — soft indigo */
+.spreadsheet[data-month="3"]  th { background: #e0f2f1; } /* Mar — soft teal */
+.spreadsheet[data-month="4"]  th { background: #f3e5f5; } /* Apr — soft violet */
+.spreadsheet[data-month="5"]  th { background: #e1f5fe; } /* May — soft sky */
+.spreadsheet[data-month="6"]  th { background: #fce4ec; } /* Jun — soft blush pink */
+.spreadsheet[data-month="7"]  th { background: #ede7f6; } /* Jul — soft lavender */
+.spreadsheet[data-month="8"]  th { background: #e0f7fa; } /* Aug — soft aqua */
+.spreadsheet[data-month="9"]  th { background: #f8e8ee; } /* Sep — soft mauve */
+.spreadsheet[data-month="10"] th { background: #e8f5e9; } /* Oct — soft mint */
+.spreadsheet[data-month="11"] th { background: #efebe9; } /* Nov — soft warm taupe */
+.spreadsheet[data-month="12"] th { background: #e3f2fd; } /* Dec — soft periwinkle */
+
 /* ══ Search highlight ════════════════════════════════════════════════ */
 mark.search-hl { background: #fef08a; color: inherit; padding: 0 1px; border-radius: 2px; }
 .search-hidden { display: none !important; }
 
 /* ══ Spreadsheet ════════════════════════════════════════════════════ */
-#spreadsheet-wrapper { flex: 1; overflow-x: auto; overflow-y: hidden; position: relative; }
-.scroll-container { overflow-y: auto; height: 100%; position: relative; }
+#spreadsheet-wrapper { flex: 1; overflow-x: auto; overflow-y: hidden; position: relative; min-height: 200px; }
+.scroll-container { overflow-y: auto; height: 100%; position: relative; will-change: scroll-position; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .spreadsheet { border-collapse: collapse; table-layout: fixed; font-size: 13px; }
+.spreadsheet tbody { contain: layout style; }
 .spreadsheet thead { position: sticky; top: 0; z-index: 10; }
 .spreadsheet th { background: var(--bg-header-cell); color: var(--text-secondary); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 10px; border: 1px solid var(--border); border-top: none; text-align: center; vertical-align: middle; user-select: none; white-space: nowrap; position: relative; overflow: visible; }
 .spreadsheet td { padding: 0; border: 1px solid var(--border); background: var(--bg-cell); height: 28px; font-family: var(--font-mono); font-size: 12.5px; color: var(--text-primary); position: relative; overflow: hidden; text-align: center; vertical-align: middle; }
@@ -274,6 +316,8 @@ td.policyno-selectable.nav-selected { outline: 2px solid var(--accent) !importan
 td.policyno-selectable .cell-content { font-weight: 600; color: var(--accent); }
 td.editing { background: var(--bg-cell-edit) !important; outline: 2px solid var(--accent) !important; outline-offset: -2px; position: relative; z-index: 6; }
 td.editing .cell-input { display: block; width: 100%; height: 100%; padding: 6px 10px; background: transparent; border: none; outline: none; color: var(--text-primary); font-family: var(--font-mono); font-size: 12.5px; text-align: center; }
+td.editing .note-date-prefix { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); pointer-events: none; white-space: nowrap; z-index: 1; }
+td.editing .cell-input.has-prefix { padding-left: 58px; text-align: left; }
 td.locked { color: var(--text-muted); }
 td.col-sn .cell-content { color: var(--text-muted); font-size: 11px; }
 td.sn-delete { cursor: pointer; }

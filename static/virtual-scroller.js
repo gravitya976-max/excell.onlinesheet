@@ -1,216 +1,236 @@
 /* ══════════════════════════════════════════════════════════════════════
-   VirtualScroller — Renders only visible rows for maximum performance
+   VirtualScroller v2.2 — 60fps smooth scrolling
 
-   How it works:
-     1. Container has overflow-y: auto with fixed height
-     2. Spacer div maintains correct scrollbar via total height
-     3. On scroll → recalculate visible window → render only those rows
-     4. Row elements are recycled (DOM reuse) for zero GC pressure
-     5. Extra rows (blank) are always rendered below virtual area
+   Key technique: Sliding Window DOM Updates
+     Instead of destroying and rebuilding all rows on every scroll,
+     we only add/remove rows at the edges of the visible window.
+     Scrolling down 1 row = remove 1 from top + add 1 at bottom.
+     This keeps DOM mutations minimal → 60fps.
 
    Usage:
-     VirtualScroller.init(container, renderRowFn, extraRowsFn)
-     VirtualScroller.setData(rows)    // full dataset for current view
-     VirtualScroller.refresh()        // re-render visible rows
+     VirtualScroller.init(container, tbody, renderRowFn, extraRowsFn)
+     VirtualScroller.setData(rows)
+     VirtualScroller.refresh()
    ══════════════════════════════════════════════════════════════════════ */
 
 const VirtualScroller = (() => {
     // ── Config ───────────────────────────────────────────────────────
-    const ROW_HEIGHT = 32;      // Fixed row height in px
-    const BUFFER = 8;           // Extra rows above/below visible area
+    const ROW_HEIGHT = 32;
+    const BUFFER = 15;          // Rows above/below viewport
     const EXTRA_ROWS = 10;      // Blank rows at bottom
 
     // ── State ────────────────────────────────────────────────────────
-    let _container = null;      // Scroll container div
-    let _spacer = null;         // Height spacer div
-    let _viewport = null;       // Visible area div (holds rendered rows)
-    let _tbody = null;          // The actual <tbody> element
-    let _data = [];             // Full dataset for current view
-    let _renderRowFn = null;    // Function: (rowData, rowIndex) => <tr>
-    let _renderExtraFn = null;  // Function: (extraIdx, startSn) => <tr>
+    let _container = null;
+    let _tbody = null;
+    let _data = [];
+    let _renderRowFn = null;
+    let _renderExtraFn = null;
     let _renderedRange = { start: -1, end: -1 };
-    let _scrollRAF = null;      // requestAnimationFrame ID
-    let _visibleCount = 0;      // How many rows fit in viewport
+    let _scrollRAF = null;
+    let _visibleCount = 0;
 
     // ── Init ─────────────────────────────────────────────────────────
-
-    /**
-     * Initialize the virtual scroller.
-     * @param {HTMLElement} scrollContainer - The div with overflow-y:auto
-     * @param {HTMLElement} tbody - The <tbody> to render rows into
-     * @param {Function} renderRowFn - (rowData, rowIndex) => <tr> element
-     * @param {Function} renderExtraFn - (extraIdx, startSn) => <tr> element
-     */
     function init(scrollContainer, tbody, renderRowFn, renderExtraFn) {
         _container = scrollContainer;
         _tbody = tbody;
         _renderRowFn = renderRowFn;
         _renderExtraFn = renderExtraFn;
 
-        // Create spacer (invisible div that sets total scroll height)
-        _spacer = document.createElement('div');
-        _spacer.className = 'vs-spacer';
-        _spacer.style.cssText = 'width:1px;pointer-events:none;position:relative;';
-        
-        // Insert spacer before tbody's table or use container
-        // We'll set height on the spacer based on data length
-
-        // Calculate visible count
         _recalcVisibleCount();
-
-        // Attach scroll listener with RAF throttle
         _container.addEventListener('scroll', _onScroll, { passive: true });
-        
-        // Recalculate on resize
         window.addEventListener('resize', _onResize);
     }
 
     function _recalcVisibleCount() {
         if (!_container) return;
-        const h = _container.clientHeight;
-        _visibleCount = Math.ceil(h / ROW_HEIGHT) + 1;
+        _visibleCount = Math.ceil(_container.clientHeight / ROW_HEIGHT) + 1;
     }
 
     // ── Data ─────────────────────────────────────────────────────────
-
-    /**
-     * Set the full dataset. Triggers re-render.
-     */
     function setData(data) {
         _data = data || [];
         _renderedRange = { start: -1, end: -1 };
         _updateSpacerHeight();
-        _renderVisible();
+        _fullRender();
     }
 
-    /**
-     * Get current data length.
-     */
-    function getDataLength() {
-        return _data.length;
-    }
-
-    /**
-     * Get a data row by index.
-     */
-    function getRow(index) {
-        return _data[index] || null;
-    }
+    function getDataLength() { return _data.length; }
+    function getRow(index) { return _data[index] || null; }
 
     // ── Spacer height ────────────────────────────────────────────────
-
     function _updateSpacerHeight() {
-        const totalHeight = (_data.length + EXTRA_ROWS) * ROW_HEIGHT;
-        // We need to set the total scrollable height on the table container
-        // Using a min-height on tbody or a spacer approach
         if (_tbody) {
-            // Set a CSS custom property for total content height
-            _tbody.style.minHeight = totalHeight + 'px';
+            _tbody.style.minHeight = ((_data.length + EXTRA_ROWS) * ROW_HEIGHT) + 'px';
             _tbody.style.position = 'relative';
         }
     }
 
     // ── Scroll handling ──────────────────────────────────────────────
-
     function _onScroll() {
-        if (_scrollRAF) return; // Already scheduled
+        if (_scrollRAF) return;
         _scrollRAF = requestAnimationFrame(() => {
             _scrollRAF = null;
-            _renderVisible();
+            _slideRender();
         });
     }
 
     function _onResize() {
         _recalcVisibleCount();
-        _renderVisible();
+        _fullRender();
     }
 
-    // ── Core render ──────────────────────────────────────────────────
+    // ── Build a single row (<tr>) by global index ────────────────────
+    function _buildRow(i) {
+        const totalDataRows = _data.length;
+        let tr;
+        if (i < totalDataRows) {
+            tr = _renderRowFn(_data[i], i);
+        } else {
+            const extraIdx = i - totalDataRows;
+            tr = _renderExtraFn(extraIdx, totalDataRows + extraIdx + 1);
+        }
+        tr.style.height = ROW_HEIGHT + 'px';
+        tr.style.contain = 'layout style';
+        tr.dataset.vsIdx = i;
+        return tr;
+    }
 
-    function _renderVisible() {
+    // ── Full render (used on setData, refresh, resize) ───────────────
+    function _fullRender() {
         if (!_container || !_tbody || !_renderRowFn) return;
 
-        const scrollTop = _container.scrollTop;
-        const totalDataRows = _data.length;
+        const { start, end } = _calcRange();
 
-        // Calculate visible range
-        let start = Math.floor(scrollTop / ROW_HEIGHT) - BUFFER;
-        let end = start + _visibleCount + BUFFER * 2;
-
-        // Clamp to valid range (data + extra rows)
-        const totalRows = totalDataRows + EXTRA_ROWS;
-        start = Math.max(0, start);
-        end = Math.min(totalRows, end);
-
-        // Skip if range hasn't changed
+        // Skip if identical
         if (start === _renderedRange.start && end === _renderedRange.end) return;
         _renderedRange = { start, end };
 
-        // Build fragment with only visible rows
         const frag = document.createDocumentFragment();
 
-        // Top spacer (pushes rendered rows to correct scroll position)
-        const topPad = document.createElement('tr');
-        topPad.className = 'vs-pad-top';
-        topPad.style.cssText = `height:${start * ROW_HEIGHT}px;display:block;`;
-        // Single cell that spans all columns
-        const topTd = document.createElement('td');
-        topTd.style.cssText = 'padding:0;border:none;height:inherit;display:block;';
-        topPad.appendChild(topTd);
-        frag.appendChild(topPad);
+        // Top spacer
+        frag.appendChild(_makeSpacerRow('vs-pad-top', start * ROW_HEIGHT));
 
-        // Render visible data rows
-        for (let i = start; i < Math.min(end, totalDataRows); i++) {
-            const tr = _renderRowFn(_data[i], i);
-            tr.style.height = ROW_HEIGHT + 'px';
-            frag.appendChild(tr);
+        // Visible rows
+        for (let i = start; i < end; i++) {
+            frag.appendChild(_buildRow(i));
         }
 
-        // Render visible extra (blank) rows
-        for (let i = Math.max(start, totalDataRows); i < end; i++) {
-            const extraIdx = i - totalDataRows;
-            const tr = _renderExtraFn(extraIdx, totalDataRows + extraIdx + 1);
-            tr.style.height = ROW_HEIGHT + 'px';
-            frag.appendChild(tr);
-        }
+        // Bottom spacer
+        const totalRows = _data.length + EXTRA_ROWS;
+        frag.appendChild(_makeSpacerRow('vs-pad-bottom', (totalRows - end) * ROW_HEIGHT));
 
-        // Bottom spacer (maintains total scroll height)
-        const bottomPad = document.createElement('tr');
-        bottomPad.className = 'vs-pad-bottom';
-        const remainingRows = totalRows - end;
-        bottomPad.style.cssText = `height:${remainingRows * ROW_HEIGHT}px;display:block;`;
-        const bottomTd = document.createElement('td');
-        bottomTd.style.cssText = 'padding:0;border:none;height:inherit;display:block;';
-        bottomPad.appendChild(bottomTd);
-        frag.appendChild(bottomPad);
-
-        // Single DOM swap
-        _tbody.innerHTML = '';
+        _tbody.textContent = '';  // Faster than innerHTML = ''
         _tbody.appendChild(frag);
+    }
+
+    // ── Slide render (60fps — only add/remove edge rows) ─────────────
+    function _slideRender() {
+        if (!_container || !_tbody || !_renderRowFn) return;
+
+        const { start, end } = _calcRange();
+        const prev = _renderedRange;
+
+        // No change
+        if (start === prev.start && end === prev.end) return;
+
+        // If range doesn't overlap at all (big jump), do full render
+        if (start >= prev.end || end <= prev.start || prev.start < 0) {
+            _renderedRange = { start, end };
+            _fullRender();
+            return;
+        }
+
+        // ── Sliding window update ────────────────────────────────────
+
+        const topSpacer = _tbody.firstElementChild;   // .vs-pad-top
+        const bottomSpacer = _tbody.lastElementChild;  // .vs-pad-bottom
+
+        // Scrolled DOWN: start increased → remove from top, add to bottom
+        if (start > prev.start) {
+            // Remove rows from top (between spacer and first needed row)
+            const removeCount = start - prev.start;
+            for (let r = 0; r < removeCount; r++) {
+                const next = topSpacer.nextElementSibling;
+                if (next && next !== bottomSpacer) {
+                    _tbody.removeChild(next);
+                }
+            }
+            // Update top spacer
+            topSpacer.style.height = (start * ROW_HEIGHT) + 'px';
+        }
+
+        if (end > prev.end) {
+            // Add new rows at bottom (before bottom spacer)
+            for (let i = prev.end; i < end; i++) {
+                _tbody.insertBefore(_buildRow(i), bottomSpacer);
+            }
+            // Update bottom spacer
+            const totalRows = _data.length + EXTRA_ROWS;
+            bottomSpacer.style.height = ((totalRows - end) * ROW_HEIGHT) + 'px';
+        }
+
+        // Scrolled UP: start decreased → add to top, remove from bottom
+        if (start < prev.start) {
+            // Add new rows at top (after top spacer)
+            const ref = topSpacer.nextElementSibling;
+            for (let i = start; i < prev.start; i++) {
+                _tbody.insertBefore(_buildRow(i), ref);
+            }
+            // Update top spacer
+            topSpacer.style.height = (start * ROW_HEIGHT) + 'px';
+        }
+
+        if (end < prev.end) {
+            // Remove rows from bottom (before bottom spacer)
+            const removeCount = prev.end - end;
+            for (let r = 0; r < removeCount; r++) {
+                const prev2 = bottomSpacer.previousElementSibling;
+                if (prev2 && prev2 !== topSpacer) {
+                    _tbody.removeChild(prev2);
+                }
+            }
+            // Update bottom spacer
+            const totalRows = _data.length + EXTRA_ROWS;
+            bottomSpacer.style.height = ((totalRows - end) * ROW_HEIGHT) + 'px';
+        }
+
+        _renderedRange = { start, end };
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    function _calcRange() {
+        const scrollTop = _container.scrollTop;
+        const totalRows = _data.length + EXTRA_ROWS;
+        let start = Math.floor(scrollTop / ROW_HEIGHT) - BUFFER;
+        let end = start + _visibleCount + BUFFER * 2;
+        start = Math.max(0, start);
+        end = Math.min(totalRows, end);
+        return { start, end };
+    }
+
+    function _makeSpacerRow(cls, height) {
+        const tr = document.createElement('tr');
+        tr.className = cls;
+        tr.style.cssText = `height:${Math.max(0, height)}px;display:block;`;
+        const td = document.createElement('td');
+        td.style.cssText = 'padding:0;border:none;height:inherit;display:block;';
+        tr.appendChild(td);
+        return tr;
     }
 
     // ── Public utilities ─────────────────────────────────────────────
 
-    /**
-     * Force re-render (e.g., after edit or filter change).
-     */
     function refresh() {
         _renderedRange = { start: -1, end: -1 };
-        _renderVisible();
+        _fullRender();
     }
 
-    /**
-     * Scroll to a specific row index.
-     */
     function scrollToRow(index) {
         if (!_container) return;
-        const targetTop = index * ROW_HEIGHT;
-        _container.scrollTop = targetTop;
+        _container.scrollTop = index * ROW_HEIGHT;
     }
 
-    /**
-     * Get the currently visible range.
-     */
     function getVisibleRange() {
         const scrollTop = _container ? _container.scrollTop : 0;
         const start = Math.floor(scrollTop / ROW_HEIGHT);
@@ -220,38 +240,19 @@ const VirtualScroller = (() => {
         };
     }
 
-    /**
-     * Update a single row without full re-render.
-     */
     function updateRow(index) {
         if (index < _renderedRange.start || index >= _renderedRange.end) return;
-        // Row is visible — find it in the DOM and replace
         const rows = _tbody.querySelectorAll('tr:not(.vs-pad-top):not(.vs-pad-bottom)');
         const domIdx = index - _renderedRange.start;
         if (domIdx >= 0 && domIdx < rows.length && _data[index]) {
-            const newTr = _renderRowFn(_data[index], index);
-            newTr.style.height = ROW_HEIGHT + 'px';
+            const newTr = _buildRow(index);
             rows[domIdx].replaceWith(newTr);
         }
     }
 
-    /**
-     * Get the row height constant.
-     */
-    function getRowHeight() {
-        return ROW_HEIGHT;
-    }
+    function getRowHeight() { return ROW_HEIGHT; }
+    function getExtraRowCount() { return EXTRA_ROWS; }
 
-    /**
-     * Get extra rows count.
-     */
-    function getExtraRowCount() {
-        return EXTRA_ROWS;
-    }
-
-    /**
-     * Destroy: remove listeners.
-     */
     function destroy() {
         if (_container) _container.removeEventListener('scroll', _onScroll);
         window.removeEventListener('resize', _onResize);
@@ -259,18 +260,9 @@ const VirtualScroller = (() => {
         _container = _tbody = _data = null;
     }
 
-    // ── Public API ───────────────────────────────────────────────────
     return {
-        init,
-        setData,
-        refresh,
-        scrollToRow,
-        getVisibleRange,
-        updateRow,
-        getDataLength,
-        getRow,
-        getRowHeight,
-        getExtraRowCount,
-        destroy,
+        init, setData, refresh, scrollToRow,
+        getVisibleRange, updateRow, getDataLength,
+        getRow, getRowHeight, getExtraRowCount, destroy,
     };
 })();

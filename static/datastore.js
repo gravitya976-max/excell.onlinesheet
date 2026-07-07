@@ -220,6 +220,7 @@ const DataStore = (() => {
 
     /**
      * Remove an entry (delete row).
+     * Always removes from master + all monthly overlays.
      */
     function removeEntry(policyno) {
         // Remove from master

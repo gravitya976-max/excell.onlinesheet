@@ -59,6 +59,15 @@ const App = (() => {
     // ── Month navigation ──────────────────────────────────────────────
     function updateMonthLabel() {
         $('#current-month-label').textContent = `${MONTH_NAMES[state.month]} ${state.year}`;
+        // Set pastel header color for current month
+        const table = document.querySelector('.spreadsheet');
+        if (table) {
+            if (state.activeTab === 'list') {
+                table.setAttribute('data-month', state.month);
+            } else {
+                table.removeAttribute('data-month');
+            }
+        }
     }
     function prevMonth() {
         state.month--;
@@ -97,6 +106,7 @@ const App = (() => {
             $('#master-info').classList.remove('hidden');
             $('#btn-generate').classList.add('hidden');
         }
+        updateMonthLabel();
         renderCurrentView();
     }
 
@@ -118,6 +128,11 @@ const App = (() => {
             }
             showListState(entries, meta);
         } else {
+            // Master tab — fetch from server if DataStore has no master data yet
+            if (entries.length === 0 && !DataStore.isBulkLoaded()) {
+                fetchMasterData();
+                return;
+            }
             showMasterState(entries);
         }
 
@@ -131,7 +146,7 @@ const App = (() => {
 
     function showEmptyState() {
         $('#empty-state').classList.remove('hidden');
-        $('#spreadsheet').classList.add('hidden');
+        $('#scroll-container').classList.add('hidden');
         $('#info-count').textContent = 'No list generated';
         $('#info-generated-at').textContent = '';
         $('#footer-count').textContent = '0 rows';
@@ -140,7 +155,7 @@ const App = (() => {
 
     function showListState(entries, meta) {
         $('#empty-state').classList.add('hidden');
-        $('#spreadsheet').classList.remove('hidden');
+        $('#scroll-container').classList.remove('hidden');
         $('#info-count').textContent = `${entries.length} policies`;
         $('#info-generated-at').textContent = meta && meta.generated_at
             ? `Generated: ${new Date(meta.generated_at).toLocaleString()}` : '';
@@ -154,7 +169,7 @@ const App = (() => {
 
     function showMasterState(entries) {
         $('#empty-state').classList.add('hidden');
-        $('#spreadsheet').classList.remove('hidden');
+        $('#scroll-container').classList.remove('hidden');
         const total = DataStore.getPolicyCount();
         $('#master-count-badge').textContent = `${total} policies`;
         $('#info-count').textContent = `${total} master policies`;
@@ -182,6 +197,20 @@ const App = (() => {
                 renderCurrentView();
             }
         } catch (e) { toast(`Load failed: ${e.message}`, 'error'); }
+    }
+
+    // ── Fetch master data (fallback if bulk not loaded yet) ───────────
+    async function fetchMasterData() {
+        try {
+            $('#info-count').textContent = 'Loading master data...';
+            const data = await api('GET', '/api/master?limit=5000');
+            if (data && data.entries) {
+                DataStore.setMasterPolicies(data.entries);
+            }
+            if (state.activeTab === 'master') {
+                renderCurrentView();
+            }
+        } catch (e) { toast(`Master load failed: ${e.message}`, 'error'); }
     }
 
     // ── Generate list ─────────────────────────────────────────────────
@@ -361,9 +390,11 @@ const App = (() => {
     function init() {
         updateMonthLabel();
 
-        // Month nav
+        // Month nav (original buttons + split hitbox overlays)
         $('#btn-prev-month').addEventListener('click', prevMonth);
         $('#btn-next-month').addEventListener('click', nextMonth);
+        $('#hit-prev').addEventListener('click', prevMonth);
+        $('#hit-next').addEventListener('click', nextMonth);
 
         // Generate
         $('#btn-generate').addEventListener('click', () => {
