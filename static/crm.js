@@ -17,6 +17,7 @@ const CRM = (() => {
     let batchId = null;
     let pollTimer = null;
     let gatewayTimer = null;
+    let gatewayOnline = false;  // tracks whether SMS/call gateway is reachable
     let activeTab = 'select'; // 'select' | 'history'
 
     // ── DOM refs ──────────────────────────────────────────────────────
@@ -52,9 +53,9 @@ const CRM = (() => {
         // Hook into row clicks
         document.addEventListener('click', onRowClick);
 
-        // Gateway status polling (15s for snappier online/offline updates)
+        // Gateway status polling (60s — avoids log flooding)
         pollGateway();
-        gatewayTimer = setInterval(pollGateway, 15000);
+        gatewayTimer = setInterval(pollGateway, 60000);
     }
 
     // ── Tabs ──────────────────────────────────────────────────────────
@@ -523,6 +524,12 @@ const CRM = (() => {
     let pendingCall = null;
 
     function handleCallRowClick(entry) {
+        // Block calls when gateway is offline
+        if (!gatewayOnline) {
+            App.toast('Gateway is offline — calls unavailable', 'error', 3000);
+            return;
+        }
+
         const mobile = entry.mobileno || '';
         if (!mobile) {
             App.toast('No mobile number for this policy', 'error', 2000);
@@ -565,19 +572,22 @@ const CRM = (() => {
     async function pollGateway() {
         try {
             const data = await App.api('GET', '/api/gateway/status');
+            gatewayOnline = !!data.online;
             const dot = $('#crm-gateway-dot');
             if (!dot) return;
 
-            if (data.online) {
+            if (gatewayOnline) {
                 dot.classList.add('online');
                 const lbl = dot.querySelector('.gateway-label');
-                if (lbl) lbl.textContent = 'Gateway Online';
+                if (lbl) lbl.textContent = '# Gateway online';
             } else {
                 dot.classList.remove('online');
                 const lbl = dot.querySelector('.gateway-label');
-                if (lbl) lbl.textContent = 'Gateway Offline';
+                if (lbl) lbl.textContent = '# Gateway offline';
             }
-        } catch { /* silent */ }
+        } catch {
+            gatewayOnline = false;
+        }
     }
 
     // ── Draggable ────────────────────────────────────────────────────

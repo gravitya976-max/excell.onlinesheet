@@ -461,6 +461,73 @@ def clear_master(confirm: str = Query(...)):
     return {"message": "All master data deleted."}
 
 
+# ── Delete a single entry (master or monthly) ─────────────────────────────────
+
+@app.delete("/api/entry/{entry_id}")
+async def delete_entry(entry_id: int, table: str = Query("monthly")):
+    """Delete a row from master_policies or monthly_entries.
+    When deleting from monthly, also removes from master_policies."""
+    with get_db() as conn:
+        if table == "master":
+            row = conn.execute("SELECT policyno FROM master_policies WHERE id=?", (entry_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "Master policy not found.")
+            pno = row["policyno"]
+            conn.execute("DELETE FROM master_policies WHERE id=?", (entry_id,))
+            # Also remove from any monthly lists
+            conn.execute("DELETE FROM monthly_entries WHERE policyno=?", (pno,))
+        else:
+            row = conn.execute("SELECT policyno FROM monthly_entries WHERE id=?", (entry_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "Monthly entry not found.")
+            pno = row["policyno"]
+            conn.execute("DELETE FROM monthly_entries WHERE id=?", (entry_id,))
+            # Also remove from master
+            conn.execute("DELETE FROM master_policies WHERE policyno=?", (pno,))
+    db_push()
+    return {"message": "Deleted.", "id": entry_id, "policyno": pno}
+
+
+# ── Update a single master policy ──────────────────────────────────────────────
+
+@app.put("/api/master/{entry_id}")
+async def update_master_entry(entry_id: int, request: Request):
+    """Update a master policy. Cannot change policyno or id."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON.")
+    if not body:
+        raise HTTPException(400, "Empty body.")
+
+    # Cannot change policyno, id
+    for k in ("policyno", "id", "updated_at"):
+        body.pop(k, None)
+
+    master_fields = ["name", "doc", "fup", "sumass", "plan", "mode", "premium", "mobileno", "status"]
+    updates, params = [], []
+    for f in master_fields:
+        if f in body:
+            updates.append(f"{f} = ?")
+            params.append(body[f])
+    if not updates:
+        raise HTTPException(400, "No valid fields.")
+
+    updates.append("updated_at = ?")
+    params.append(datetime.now().isoformat())
+    params.append(entry_id)
+
+    with get_db() as conn:
+        row = conn.execute("SELECT policyno FROM master_policies WHERE id=?", (entry_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Master policy not found.")
+        policyno = row["policyno"]
+        conn.execute(f"UPDATE master_policies SET {', '.join(updates)} WHERE id = ?", params)
+
+    db_push()
+    return {"message": "Updated.", "id": entry_id, "policyno": policyno}
+
+
 # ── Search master data (fallback when monthly has no results) ───────────────────
 
 @app.get("/api/search/master")

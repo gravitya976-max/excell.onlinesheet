@@ -19,6 +19,10 @@ const App = (() => {
     function getCached(y, m) { return _listCache[cacheKey(y, m)] || null; }
     function setCache(y, m, data) { _listCache[cacheKey(y, m)] = data; }
 
+    // ── Sheet keys for Spreadsheet component ──────────────────────
+    function listSheetKey(y, m) { return `list/${y}/${m}`; }
+    const MASTER_SHEET_KEY = 'master';
+
     const MONTH_NAMES = [
         '', 'January', 'February', 'March', 'April', 'May', 'June',
         'July', 'August', 'September', 'October', 'November', 'December'
@@ -80,10 +84,21 @@ const App = (() => {
 
     // ── Tabs ──────────────────────────────────────────────────────────
     function switchTab(tab) {
+        if (state.activeTab === tab) return; // already on this tab
         state.activeTab = tab;
-        document.querySelectorAll('.tab').forEach(t =>
-            t.classList.toggle('active', t.dataset.tab === tab)
-        );
+
+        // Clear search when switching tabs
+        clearSearchInput();
+
+        document.querySelectorAll('.tab').forEach(t => {
+            if (t.dataset.tab === tab) {
+                t.classList.add('tab-active');
+                t.classList.remove('tab-inactive');
+            } else {
+                t.classList.remove('tab-active');
+                t.classList.add('tab-inactive');
+            }
+        });
         if (tab === 'list') {
             $('#month-controls').classList.remove('hidden');
             $('#master-info').classList.add('hidden');
@@ -99,20 +114,23 @@ const App = (() => {
 
     // ── Load monthly list ─────────────────────────────────────────────
     function loadListFast() {
+        const sheetKey = listSheetKey(state.year, state.month);
+
         // Show cached data instantly, then refresh in background
         const cached = getCached(state.year, state.month);
         if (cached) {
             state.entries = cached.entries || [];
             state._allEntries = [...state.entries];
             state.listMeta = cached.list;
-            renderList();
+            renderList(sheetKey);
             applyFilter($('#search-input').value);
         }
         // Always fetch fresh data (silently updates if changed)
-        loadList(!cached);  // show skeleton only if no cache
+        loadList(!cached, sheetKey);  // show skeleton only if no cache
     }
 
-    async function loadList(showSkeleton = true) {
+    async function loadList(showSkeleton = true, sheetKey = null) {
+        const sk = sheetKey || listSheetKey(state.year, state.month);
         try {
             if (showSkeleton) {
                 $('#info-count').textContent = 'Loading...';
@@ -123,12 +141,16 @@ const App = (() => {
             state.entries = data.entries || [];
             state._allEntries = [...state.entries];
             state.listMeta = data.list;
-            renderList();
-            applyFilter($('#search-input').value);
+            // Only re-render if we're still viewing this month's list tab
+            if (state.activeTab === 'list' && listSheetKey(state.year, state.month) === sk) {
+                renderList(sk);
+                applyFilter($('#search-input').value);
+            }
         } catch (e) { toast(`Load failed: ${e.message}`, 'error'); }
     }
 
-    function renderList() {
+    function renderList(sheetKey) {
+        const sk = sheetKey || listSheetKey(state.year, state.month);
         const { entries, listMeta } = state;
         if (!listMeta || entries.length === 0) {
             $('#empty-state').classList.remove('hidden');
@@ -136,7 +158,7 @@ const App = (() => {
             $('#info-count').textContent = 'No list generated';
             $('#info-generated-at').textContent = '';
             $('#footer-count').textContent = '0 rows';
-            updateStatPills(0, 0);
+            updateStatPills(0, 0, 0);
             return;
         }
         $('#empty-state').classList.add('hidden');
@@ -146,15 +168,20 @@ const App = (() => {
             ? `Generated: ${new Date(listMeta.generated_at).toLocaleString()}` : '';
         $('#footer-count').textContent = `${entries.length} rows`;
         // Calculate due vs paid for stat pills
-        const dueCount = entries.filter(e => !e.status || e.status.trim() === '').length;
+        const dueCount = entries.filter(e => {
+            const s = (e.status || '').trim().toLowerCase();
+            return s === '' || s === 'due';
+        }).length;
         const paidCount = entries.length - dueCount;
-        updateStatPills(dueCount, paidCount);
-        Spreadsheet.render(entries);
+        updateStatPills(entries.length, dueCount, paidCount);
+        Spreadsheet.render(entries, { sheetKey: sk, animate: true });
     }
 
-    function updateStatPills(due, paid) {
+    function updateStatPills(total, due, paid) {
+        const totalEl = $('#stat-total-val');
         const dueEl = $('#stat-due-val');
         const paidEl = $('#stat-paid-val');
+        if (totalEl) totalEl.textContent = total;
         if (dueEl) dueEl.textContent = due;
         if (paidEl) paidEl.textContent = paid;
     }
@@ -172,7 +199,7 @@ const App = (() => {
             $('#info-count').textContent = `${total} master policies`;
             $('#info-generated-at').textContent = '';
             $('#footer-count').textContent = `${total} rows`;
-            Spreadsheet.render(state.entries);
+            Spreadsheet.render(state.entries, { sheetKey: MASTER_SHEET_KEY, animate: true });
             applyFilter($('#search-input').value);
         } catch (e) { toast(`Load failed: ${e.message}`, 'error'); }
     }
@@ -183,8 +210,9 @@ const App = (() => {
         try {
             const data = await api('POST', `/api/generate?year=${state.year}&month=${state.month}`);
             toast(`List generated: ${data.filtered_count} policies due`, 'success');
-            // Invalidate cache for this month and reload
+            // Invalidate caches for this month and reload
             delete _listCache[cacheKey(state.year, state.month)];
+            Spreadsheet.invalidateCache(listSheetKey(state.year, state.month));
             await loadList();
         } catch (e) { toast(`Generate failed: ${e.message}`, 'error'); }
         finally { hideLoading(); }
@@ -199,6 +227,15 @@ const App = (() => {
             await api('PUT', `/api/entry/${entryId}`, { [field]: value });
             // Invalidate cache since data changed
             delete _listCache[cacheKey(state.year, state.month)];
+            // Update local state so stats recalculate instantly
+            const entry = state.entries.find(e => e.id === entryId);
+            if (entry) {
+                entry[field] = value;
+                // Also update _allEntries
+                const allEntry = state._allEntries.find(e => e.id === entryId);
+                if (allEntry) allEntry[field] = value;
+            }
+            recalcStats();
             syncEl.textContent = '✓ Saved';
             syncEl.className = 'sync-indicator synced';
             setTimeout(() => { syncEl.textContent = ''; syncEl.className = 'sync-indicator'; }, 3000);
@@ -210,6 +247,44 @@ const App = (() => {
             setTimeout(() => { syncEl.textContent = ''; syncEl.className = 'sync-indicator'; }, 3000);
             return false;
         }
+    }
+
+    // ── Update master entry ────────────────────────────────────────────
+    async function updateMasterEntry(entryId, field, value) {
+        const syncEl = $('#footer-sync');
+        syncEl.textContent = 'Saving...';
+        syncEl.className = 'sync-indicator syncing';
+        try {
+            await api('PUT', `/api/master/${entryId}`, { [field]: value });
+            // Update local state
+            const entry = state.entries.find(e => e.id === entryId);
+            if (entry) {
+                entry[field] = value;
+                const allEntry = state._allEntries.find(e => e.id === entryId);
+                if (allEntry) allEntry[field] = value;
+            }
+            syncEl.textContent = '✓ Saved';
+            syncEl.className = 'sync-indicator synced';
+            setTimeout(() => { syncEl.textContent = ''; syncEl.className = 'sync-indicator'; }, 3000);
+            return true;
+        } catch (e) {
+            syncEl.textContent = '✗ Save failed';
+            syncEl.className = 'sync-indicator error';
+            toast(`Save failed: ${e.message}`, 'error');
+            setTimeout(() => { syncEl.textContent = ''; syncEl.className = 'sync-indicator'; }, 3000);
+            return false;
+        }
+    }
+
+    function recalcStats() {
+        const entries = state._allEntries || state.entries;
+        const total = entries.length;
+        const due = entries.filter(e => {
+            const s = (e.status || '').trim().toLowerCase();
+            return s === '' || s === 'due';
+        }).length;
+        const paid = total - due;
+        updateStatPills(total, due, paid);
     }
 
     // ── Upload modal ──────────────────────────────────────────────────
@@ -242,6 +317,8 @@ const App = (() => {
             toast(msg, 'success', 5000);
             if (data.errors && data.errors.length)
                 data.errors.forEach(e => toast(`${e.file}: ${e.error}`, 'error', 5000));
+            // Invalidate master sheet cache after upload
+            Spreadsheet.invalidateCache(MASTER_SHEET_KEY);
             await refreshMasterCount();
         } catch (e) {
             resultEl.className = 'test-result failure';
@@ -358,11 +435,60 @@ const App = (() => {
         clearSearchInput();
         applyFilter('');
     }
+    // ── Confirm dialog (uses existing #confirm-overlay modal) ──────────
+    let _confirmCallback = null;
+    function showConfirm(title, message, onConfirm) {
+        const overlay = $('#confirm-overlay');
+        if (!overlay) { if (confirm(message)) onConfirm(); return; }
+        $('#confirm-title').textContent = title;
+        $('#confirm-message').textContent = message;
+        _confirmCallback = onConfirm;
+        overlay.classList.remove('hidden');
+    }
+    document.addEventListener('DOMContentLoaded', () => {
+        const overlay = $('#confirm-overlay');
+        if (!overlay) return;
+        $('#btn-confirm-ok')?.addEventListener('click', () => {
+            overlay.classList.add('hidden');
+            if (_confirmCallback) { _confirmCallback(); _confirmCallback = null; }
+        });
+        $('#btn-confirm-cancel')?.addEventListener('click', () => {
+            overlay.classList.add('hidden');
+            _confirmCallback = null;
+        });
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) { overlay.classList.add('hidden'); _confirmCallback = null; }
+        });
+    });
+
+    // ── Delete an entry ───────────────────────────────────────────────
+    async function deleteEntry(entryId) {
+        const table = state.activeTab === 'master' ? 'master' : 'monthly';
+        try {
+            const res = await api('DELETE', `/api/entry/${entryId}?table=${table}`);
+            toast(`Deleted policy ${res.policyno}`, 'success', 3000);
+            // Remove from local state
+            state.entries = state.entries.filter(e => e.id !== entryId);
+            state._allEntries = state._allEntries.filter(e => e.id !== entryId);
+            // Re-render
+            reloadActive();
+            return true;
+        } catch (e) {
+            toast(`Delete failed: ${e.message}`, 'error');
+            return false;
+        }
+    }
 
     // ── Reload active tab (called after new entry saved from empty row) ──
     function reloadActive() {
-        if (state.activeTab === 'master') loadMasterData();
-        else loadList();
+        if (state.activeTab === 'master') {
+            Spreadsheet.invalidateCache(MASTER_SHEET_KEY);
+            loadMasterData();
+        } else {
+            Spreadsheet.invalidateCache(listSheetKey(state.year, state.month));
+            delete _listCache[cacheKey(state.year, state.month)];
+            loadList();
+        }
     }
 
     // ── Init ──────────────────────────────────────────────────────────
@@ -414,5 +540,5 @@ const App = (() => {
     }
 
     document.addEventListener('DOMContentLoaded', init);
-    return { state, updateEntry, toast, api, reloadActive };
+    return { state, updateEntry, updateMasterEntry, deleteEntry, toast, api, reloadActive, showConfirm };
 })();

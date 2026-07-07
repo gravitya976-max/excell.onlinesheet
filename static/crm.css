@@ -12,20 +12,18 @@
 
 .crm-mode-btn {
     background: transparent;
-    border: 2px solid transparent;
+    border: none;
     border-radius: 8px;
-    padding: 6px 10px;
+    padding: 0;
     cursor: pointer;
-    font-size: 18px;
     transition: all 0.2s ease;
     position: relative;
-    color: #1e2330;
 }
 .crm-mode-btn:hover { background: rgba(0,0,0,0.04); }
 .crm-mode-btn.active-sms {
-    color: #C9A84C;
-    border-color: #C9A84C;
-    background: rgba(201,168,76,0.1);
+    color: #15803d;
+    border-color: #15803d;
+    background: rgba(22,163,74,0.15);
 }
 .crm-mode-btn.active-call {
     color: #2ECC71;
@@ -33,24 +31,7 @@
     background: rgba(46,204,113,0.1);
 }
 
-/* ── Gateway Status Dot ───────────────────────────────────────────── */
-.gateway-dot {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 11px;
-    color: #8a9bb0;
-    margin-left: 8px;
-    white-space: nowrap;
-}
-.gateway-dot .dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: #d04040;
-    transition: background 0.3s;
-}
-.gateway-dot.online .dot { background: #1a9a5a; }
-.gateway-dot.online { color: #1a9a5a; }
+
 
 /* ── Floating Selection Box ───────────────────────────────────────── */
 .crm-float-box {
@@ -259,12 +240,36 @@
 }
 .crm-call-confirm:hover { opacity: 0.9; }
 
-/* ── SMS mode row highlight ──────────────────────────────────────── */
-tr.crm-selected {
-    background: rgba(22,163,74,0.06) !important;
+/* ── SMS mode row highlight (high-visibility) ──────────────────────── */
+tr.crm-selected td {
+    background: rgba(22,163,74,0.10) !important;
+    border-bottom-color: rgba(22,163,74,0.25) !important;
 }
 tr.crm-selected td:first-child {
-    box-shadow: inset 3px 0 0 #16a34a;
+    box-shadow: inset 4px 0 0 #16a34a;
+    position: relative;
+}
+tr.crm-selected td:first-child::after {
+    content: '✓';
+    position: absolute;
+    top: 50%;
+    left: 6px;
+    transform: translateY(-50%);
+    font-size: 10px;
+    font-weight: 800;
+    color: #16a34a;
+    pointer-events: none;
+}
+tr.crm-selected td.col-sn .cell-content {
+    color: #16a34a;
+    font-weight: 700;
+}
+tr.crm-selected td.col-policyno .cell-content,
+tr.crm-selected td.policyno-selectable .cell-content {
+    color: #15803d;
+}
+tr.crm-selected:hover td {
+    background: rgba(22,163,74,0.15) !important;
 }
 
 /* ── Draggable ────────────────────────────────────────────────────── */
@@ -367,9 +372,9 @@ tr.crm-selected td:first-child {
     border-top: 1px solid #eee;
 }
 .crm-mode-btn.active-queue {
-    color: #E67E22;
-    border-color: #E67E22;
-    background: rgba(230,126,34,0.1);
+    color: #15803d;
+    border-color: #15803d;
+    background: rgba(22,163,74,0.15);
 }
 
 /* ── Queue Stats Dashboard ────────────────────────────────────────── */

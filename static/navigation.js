@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════════════════
-   Online Sheet — Navigation Intelligence (Excel-like)
+   Online Sheet — Navigation Intelligence (Excel-like) v2
    
    FEATURES:
      • Single click on editable cell  →  select (highlight)
@@ -8,8 +8,9 @@
      • Escape                         →  deselect
      • Status cells: p/a/d/c/b        →  set status & stay selected
      • Tab / Shift+Tab                →  move right / left
-     • Direction memory: if you were moving vertically (Enter/arrows),
-       Enter continues vertically; same for horizontal.
+     • Ctrl+Z                         →  undo last edit
+     • Ctrl+C                         →  copy hovered row's policy number
+     • Policy number cells            →  selectable but not editable
    ══════════════════════════════════════════════════════════════════════ */
 
 const Navigation = (() => {
@@ -65,6 +66,11 @@ const Navigation = (() => {
         return { rows: tbody.rows.length, cols: tbody.rows[0].cells.length };
     }
 
+    function isSelectableCell(td) {
+        // Editable cells + policyno-selectable cells can be selected
+        return td && (td.classList.contains('editable') || td.classList.contains('policyno-selectable'));
+    }
+
     function isEditableCell(td) {
         return td && td.classList.contains('editable');
     }
@@ -73,8 +79,11 @@ const Navigation = (() => {
         return td && td.classList.contains('col-status');
     }
 
+    function isPolicyNoCell(td) {
+        return td && td.classList.contains('policyno-selectable');
+    }
+
     function getCellInfo(td) {
-        // Retrieve column def and entry from Spreadsheet
         const field = td.dataset.field;
         const entryId = td.dataset.entryId;
         if (!field || !entryId) return null;
@@ -88,7 +97,7 @@ const Navigation = (() => {
     function selectCell(td) {
         if (selectedCell === td) return;
         deselectCell();
-        if (!td || !isEditableCell(td)) return;
+        if (!td || !isSelectableCell(td)) return;
 
         selectedCell = td;
         td.classList.add('nav-selected');
@@ -106,7 +115,6 @@ const Navigation = (() => {
         if (selectedCell) {
             const tr = selectedCell.closest('tr');
             if (tr) tr.classList.remove('nav-active-row');
-            // Re-enable hover
             const table = selectedCell.closest('.spreadsheet');
             if (table) table.classList.remove('nav-has-selection');
             selectedCell.classList.remove('nav-selected');
@@ -131,11 +139,11 @@ const Navigation = (() => {
             case 'right': newCol = Math.min(grid.cols - 1, pos.col + 1); break;
         }
 
-        // Skip non-editable cells (sn, policyno) — search further in same direction
+        // Skip non-selectable cells (sn index only) — policyno IS selectable now
         let td = getCellAt(newRow, newCol);
         const maxTries = Math.max(grid.rows, grid.cols);
         let tries = 0;
-        while (td && !isEditableCell(td) && tries < maxTries) {
+        while (td && !isSelectableCell(td) && tries < maxTries) {
             switch (direction) {
                 case 'up':    newRow--; break;
                 case 'down':  newRow++; break;
@@ -147,7 +155,7 @@ const Navigation = (() => {
             tries++;
         }
 
-        if (td && isEditableCell(td)) {
+        if (td && isSelectableCell(td)) {
             lastDirection = direction;
             selectCell(td);
         }
@@ -162,8 +170,9 @@ const Navigation = (() => {
         const oldVal = entry[col.key] || '';
 
         if (newVal !== oldVal) {
+            // Push undo before change
+            Spreadsheet.pushUndo(entry.id, col.key, oldVal, newVal);
             entry[col.key] = newVal;
-            // Use Spreadsheet's saveCell via the exposed API
             Spreadsheet._saveCell(td, entry.id, col.key, newVal);
         }
 
@@ -171,7 +180,7 @@ const Navigation = (() => {
         Spreadsheet._restoreCell(td, col, entry, newVal);
         Spreadsheet._addStatusClass(td, newVal);
 
-        // Stay selected — don't deselect
+        // Stay selected
         td.classList.add('nav-selected');
         td.setAttribute('tabindex', '0');
         td.focus();
@@ -179,6 +188,33 @@ const Navigation = (() => {
 
     // ── Keyboard handler ──────────────────────────────────────────────
     function onKeyDown(e) {
+        // Ctrl+Z — undo (works everywhere, not just when cell selected)
+        if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !isEditing) {
+            // Don't undo when typing in search or other inputs
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+            e.preventDefault();
+            Spreadsheet.undo();
+            return;
+        }
+
+        // Ctrl+C — copy policy number from hovered row
+        if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+            const hoveredRow = Spreadsheet.getHoveredRow();
+            if (hoveredRow) {
+                e.preventDefault();
+                Spreadsheet.copyPolicyNo(hoveredRow);
+                return;
+            }
+            // If a cell is selected (no hover), copy from selected cell's row
+            if (selectedCell) {
+                e.preventDefault();
+                const tr = selectedCell.closest('tr');
+                if (tr) Spreadsheet.copyPolicyNo(tr);
+                return;
+            }
+        }
+
         // Don't interfere with text editing inputs
         if (isEditing) return;
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
@@ -213,24 +249,47 @@ const Navigation = (() => {
             return;
         }
 
-        // Status cell shortcuts
+        // Don't try to edit policyno cells — they're selectable but not editable
+        if (isPolicyNoCell(selectedCell)) return;
+
+        // Status cell shortcuts (works for both data and extra rows)
         if (isStatusCell(selectedCell)) {
             const lk = key.toLowerCase();
             if (lk in STATUS_KEYS) {
                 e.preventDefault();
-                applyStatusKey(selectedCell, lk);
+                // Extra row status: save to extraRowData
+                if (Spreadsheet._isExtraCell(selectedCell)) {
+                    const extraIdx = parseInt(selectedCell.dataset.extraIdx);
+                    const extraData = Spreadsheet._getExtraRowData();
+                    if (!extraData[extraIdx]) extraData[extraIdx] = {};
+                    extraData[extraIdx]['status'] = STATUS_KEYS[lk];
+                    const col = Spreadsheet.COLUMNS.find(c => c.key === 'status');
+                    const val = STATUS_KEYS[lk];
+                    Spreadsheet._restoreCell(selectedCell, col, { status: val }, val);
+                    Spreadsheet._addStatusClass(selectedCell, val);
+                    selectedCell.classList.add('nav-selected');
+                    selectedCell.setAttribute('tabindex', '0');
+                    selectedCell.focus();
+                } else {
+                    applyStatusKey(selectedCell, lk);
+                }
                 return;
             }
         }
 
         // Any other printable key on a non-status editable cell → start editing
         if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-            if (!isStatusCell(selectedCell)) {
-                const info = getCellInfo(selectedCell);
-                if (info) {
-                    e.preventDefault();
-                    isEditing = true;
-                    Spreadsheet._startEdit(selectedCell, info.col, info.entry, key);
+            if (!isStatusCell(selectedCell) && isEditableCell(selectedCell)) {
+                e.preventDefault();
+                isEditing = true;
+                // Extra row cell → use extra edit
+                if (Spreadsheet._isExtraCell(selectedCell)) {
+                    Spreadsheet._startExtraEdit(selectedCell, key);
+                } else {
+                    const info = getCellInfo(selectedCell);
+                    if (info) {
+                        Spreadsheet._startEdit(selectedCell, info.col, info.entry, key);
+                    }
                 }
             }
         }
@@ -238,10 +297,9 @@ const Navigation = (() => {
 
     // ── Click handler: single click to select ─────────────────────────
     function onClick(e) {
-        // Find the closest td
-        const td = e.target.closest('td.editable');
+        // Find the closest selectable td (editable or policyno-selectable)
+        const td = e.target.closest('td.editable, td.policyno-selectable');
         if (td) {
-            // Don't select if clicking inside an active input
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
             selectCell(td);
         } else {

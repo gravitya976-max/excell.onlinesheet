@@ -1,10 +1,17 @@
 /* ══════════════════════════════════════════════════════════════════════
-   Online Sheet — Spreadsheet Rendering & Inline Editing
+   Online Sheet — Spreadsheet Rendering & Inline Editing (v2)
 
    INTERACTIONS:
-     • Double LEFT-CLICK on a row    →  copy policy number
+     • Hover row + Ctrl+C            →  copy policy number
      • Single RIGHT-CLICK on a cell  →  edit that cell
      • Double LEFT-CLICK a header    →  rename the header
+
+   FEATURES:
+     • Master data is fully editable (except policy number)
+     • Policy number is selectable but never editable
+     • Undo stack: Ctrl+Z reverses edits one by one
+     • Event delegation for high performance
+     • Smooth rendering with DocumentFragment
    ══════════════════════════════════════════════════════════════════════ */
 
 const Spreadsheet = (() => {
@@ -54,13 +61,74 @@ const Spreadsheet = (() => {
 
     let _colEls = {};
 
+    /* ── Sheet Cache ─────────────────────────────────────────────────── */
+    const _sheetCache = {};
+    let _currentSheetKey = null;
+
+    /* ── Hovered row tracking (for Ctrl+C) ───────────────────────────── */
+    let _hoveredRow = null;
+
+    /* ── Undo Stack ──────────────────────────────────────────────────── */
+    const _undoStack = [];
+    const MAX_UNDO = 100;
+
+    function pushUndo(entryId, field, oldValue, newValue) {
+        _undoStack.push({
+            entryId,
+            field,
+            oldValue,
+            newValue,
+            tab: App.state.activeTab,
+            timestamp: Date.now(),
+        });
+        if (_undoStack.length > MAX_UNDO) _undoStack.shift();
+    }
+
+    async function undo() {
+        if (_undoStack.length === 0) {
+            if (typeof App !== 'undefined') App.toast('Nothing to undo', 'info', 1500);
+            return;
+        }
+        const action = _undoStack.pop();
+        const { entryId, field, oldValue, tab } = action;
+
+        // Call the appropriate API to revert
+        let ok;
+        if (tab === 'master') {
+            ok = await App.updateMasterEntry(entryId, field, oldValue);
+        } else {
+            ok = await App.updateEntry(entryId, field, oldValue);
+        }
+
+        if (ok) {
+            // Update the cell in DOM if visible
+            const tr = document.querySelector(`tr[data-entry-id="${entryId}"]`);
+            if (tr) {
+                const col = COLUMNS.find(c => c.key === field);
+                if (col) {
+                    const td = tr.querySelector(`td[data-field="${field}"]`);
+                    if (td) {
+                        const entry = App.state.entries.find(e => e.id === entryId);
+                        if (entry) {
+                            entry[field] = oldValue;
+                            restoreCellDisplay(td, col, entry, oldValue);
+                        }
+                    }
+                }
+            }
+            if (typeof App !== 'undefined') App.toast('↩ Undo done', 'success', 1500);
+        }
+    }
+
     /* ── Colgroup ────────────────────────────────────────────────────── */
     function buildColgroup() {
         const table = document.getElementById('spreadsheet');
         const old = table.querySelector('colgroup');
         if (old) old.remove();
+        const isMaster = App.state.activeTab === 'master';
+        const activeCols = isMaster ? COLUMNS.filter(c => c.key !== 'status') : COLUMNS;
         const colgroup = document.createElement('colgroup');
-        COLUMNS.forEach(col => {
+        activeCols.forEach(col => {
             const colEl = document.createElement('col');
             colEl.style.width = colWidths[col.key] + 'px';
             _colEls[col.key] = colEl;
@@ -72,14 +140,18 @@ const Spreadsheet = (() => {
 
     function updateTableWidth() {
         const table = document.getElementById('spreadsheet');
-        table.style.width = COLUMNS.reduce((s, c) => s + (colWidths[c.key] || 100), 0) + 'px';
+        const isMaster = App.state.activeTab === 'master';
+        const activeCols = isMaster ? COLUMNS.filter(c => c.key !== 'status') : COLUMNS;
+        table.style.width = activeCols.reduce((s, c) => s + (colWidths[c.key] || 100), 0) + 'px';
     }
 
     /* ── Header ──────────────────────────────────────────────────────── */
     function renderHeader() {
         const headerRow = document.getElementById('header-row');
         headerRow.innerHTML = '';
-        COLUMNS.forEach(col => {
+        const isMaster = App.state.activeTab === 'master';
+        const activeCols = isMaster ? COLUMNS.filter(c => c.key !== 'status') : COLUMNS;
+        activeCols.forEach(col => {
             const th = document.createElement('th');
             th.className = `col-${col.key}`;
             const labelSpan = document.createElement('span');
@@ -143,17 +215,8 @@ const Spreadsheet = (() => {
     }
 
     /* ════════════════════════════════════════════════════════════════════
-       SINGLE RIGHT-CLICK → edit cell
+       COPY POLICY NUMBER (called by Ctrl+C handler)
        ════════════════════════════════════════════════════════════════════ */
-    function onCellRightClick(e, td, col, entry) {
-        e.preventDefault(); // block browser context menu
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-        if (!col.editable) return;
-        if (td.classList.contains('editing')) return;
-        closeActiveEdit();
-        startEdit(td, col, entry);
-    }
-
     function copyPolicyNo(tr) {
         const pIdx = COLUMNS.findIndex(c => c.key === 'policyno');
         if (pIdx === -1) return;
@@ -180,17 +243,17 @@ const Spreadsheet = (() => {
     function showCopyFeedback(tr, pno) {
         document.querySelectorAll('tr.copied-row').forEach(r => r.classList.remove('copied-row'));
         tr.classList.add('copied-row');
-        setTimeout(() => tr.classList.remove('copied-row'), 1500);
+        setTimeout(() => tr.classList.remove('copied-row'), 3000);
         if (typeof App !== 'undefined') App.toast(`Copied: ${pno}`, 'success', 1500);
     }
 
-    // ── Extra (blank) editable rows — always 30 after real data ──────
-    const extraRowData = {}; // idx → { field: value }
+    // ── Extra (blank) editable rows — always 10 after real data ──────
+    const extraRowData = {};
 
     function commitExtraRow(idx) {
         const data = extraRowData[idx] || {};
         const pno = (data.policyno || '').trim();
-        if (!pno) return; // nothing to save yet
+        if (!pno) return;
 
         const activeTab = App.state.activeTab;
         let url;
@@ -207,22 +270,9 @@ const Spreadsheet = (() => {
                 let msg = `✓ Policy ${pno} saved to ${label}`;
                 if (res.added_to_master) msg += ' + master data';
                 App.toast(msg, 'success', 4000);
-                // Reload the active tab to reflect new entry + fresh 30 empty rows
-                if (activeTab === 'master') {
-                    App.reloadActive();
-                } else {
-                    App.reloadActive();
-                }
+                App.reloadActive();
             })
             .catch(err => App.toast(`Save failed: ${err.message}`, 'error'));
-    }
-
-    /* ════════════════════════════════════════════════════════════════════
-       DOUBLE LEFT-CLICK → copy policy number
-       ════════════════════════════════════════════════════════════════════ */
-    function onRowDblClick(e, tr) {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-        copyPolicyNo(tr);
     }
 
     function closeActiveEdit() {
@@ -232,28 +282,35 @@ const Spreadsheet = (() => {
         }
     }
 
-    /* ── Render ───────────────────────────────────────────────────────── */
-    function render(entries) {
-        loadColWidths(); loadHeaderNames(); loadRowHeights(); buildColgroup(); renderHeader();
-        const tbody = document.getElementById('spreadsheet-body');
-        tbody.innerHTML = '';
-        entries.forEach((entry, idx) => tbody.appendChild(createDataRow(entry, idx)));
+    /* ════════════════════════════════════════════════════════════════════
+       BUILD FRAGMENT — Create all rows off-screen in a DocumentFragment
+       ════════════════════════════════════════════════════════════════════ */
+    function buildFragment(entries) {
+        const frag = document.createDocumentFragment();
+        const isMaster = App.state.activeTab === 'master';
 
+        entries.forEach((entry, idx) => frag.appendChild(createDataRow(entry, idx, isMaster)));
+
+        // Extra blank rows — navigable just like data rows
+        const extraActiveCols = isMaster ? COLUMNS.filter(c => c.key !== 'status') : COLUMNS;
         for (let i = 0; i < EXTRA_ROWS; i++) {
             const rowIdx = entries.length + i;
             const extraIdx = i;
             const tr = document.createElement('tr');
             tr.className = 'extra-row';
+            tr.dataset.extraIdx = extraIdx;
             if (rowHeights[rowIdx]) tr.style.height = rowHeights[rowIdx] + 'px';
 
-            COLUMNS.forEach(col => {
+            extraActiveCols.forEach(col => {
                 const td = document.createElement('td');
                 td.className = `col-${col.key}`;
                 if (rowHeights[rowIdx]) td.style.height = rowHeights[rowIdx] + 'px';
 
                 if (col.type === 'index') {
-                    td.classList.add('locked');
+                    td.classList.add('locked', 'sn-delete');
+                    td.dataset.extraIdx = extraIdx;
                     td.style.position = 'relative';
+                    td.style.cursor = 'pointer';
                     const span = document.createElement('span');
                     span.className = 'cell-content';
                     span.textContent = entries.length + i + 1;
@@ -262,69 +319,97 @@ const Spreadsheet = (() => {
                     rh.className = 'row-resize-handle';
                     rh.addEventListener('mousedown', (e) => startRowResize(e, rowIdx, tr));
                     td.appendChild(rh);
-                } else if (col.type === 'status') {
-                    const span = document.createElement('span');
-                    span.className = 'cell-content';
-                    td.appendChild(span);
                 } else {
+                    // All non-index cells are editable+selectable, just like data rows
+                    td.classList.add('editable');
+                    td.dataset.field = col.key;
+                    td.dataset.extraIdx = extraIdx;
+
                     const span = document.createElement('span');
                     span.className = 'cell-content';
-                    span.textContent = (extraRowData[extraIdx] || {})[col.key] || '';
+                    if (col.type === 'status') {
+                        const val = (extraRowData[extraIdx] || {})[col.key] || '';
+                        // Only show status label if a value was explicitly set
+                        if (val) {
+                            span.textContent = STATUS_LABELS[val] || val;
+                            addStatusClass(td, val);
+                        }
+                    } else {
+                        span.textContent = (extraRowData[extraIdx] || {})[col.key] || '';
+                    }
                     td.appendChild(span);
-
-                    td.addEventListener('dblclick', () => {
-                        if (td.querySelector('input')) return;
-                        td.innerHTML = '';
-                        td.style.position = 'relative';
-                        const input = document.createElement('input');
-                        input.type = 'text';
-                        input.className = 'cell-input';
-                        input.style.position = 'absolute';
-                        input.style.inset = '0';
-                        input.style.width = '100%';
-                        input.style.height = '100%';
-                        input.value = (extraRowData[extraIdx] || {})[col.key] || '';
-                        input.addEventListener('blur', () => {
-                            const val = input.value.trim();
-                            if (!extraRowData[extraIdx]) extraRowData[extraIdx] = {};
-                            extraRowData[extraIdx][col.key] = val;
-                            td.innerHTML = '';
-                            const s2 = document.createElement('span');
-                            s2.className = 'cell-content';
-                            s2.textContent = val;
-                            td.appendChild(s2);
-                            if (col.key === 'policyno' && val) commitExtraRow(extraIdx);
-                        });
-                        input.addEventListener('keydown', e => {
-                            if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); input.blur(); }
-                            if (e.key === 'Escape') { input.value = ''; input.blur(); }
-                        });
-                        td.appendChild(input);
-                        input.focus();
-                    });
                 }
                 tr.appendChild(td);
             });
-            tbody.appendChild(tr);
+            frag.appendChild(tr);
+        }
+
+        return frag;
+    }
+
+    /* ════════════════════════════════════════════════════════════════════
+       RENDER — The main entry point. Builds off-screen, swaps instantly.
+       ════════════════════════════════════════════════════════════════════ */
+    function render(entries, options = {}) {
+        const { sheetKey = 'default', animate = true } = options;
+
+        loadColWidths(); loadHeaderNames(); loadRowHeights();
+        buildColgroup(); renderHeader();
+
+        const tbody = document.getElementById('spreadsheet-body');
+
+        // Deselect any navigation before swapping
+        if (typeof Navigation !== 'undefined') Navigation.deselectCell();
+        closeActiveEdit();
+
+        // Clear extra row data when switching sheets
+        if (_currentSheetKey !== sheetKey) {
+            for (const k in extraRowData) delete extraRowData[k];
+        }
+
+        // Build the fragment (always fresh — entries may have changed)
+        const frag = buildFragment(entries);
+
+        // Instant swap: clear + append in one go (no blink)
+        tbody.innerHTML = '';
+        tbody.appendChild(frag);
+        _currentSheetKey = sheetKey;
+    }
+
+    /* ── Invalidate cache ────────────────────────────────────────────── */
+    function invalidateCache(sheetKey) {
+        if (sheetKey) {
+            delete _sheetCache[sheetKey];
+        } else {
+            for (const k in _sheetCache) delete _sheetCache[k];
         }
     }
 
-    function createDataRow(entry, idx) {
+    function getCurrentSheetKey() {
+        return _currentSheetKey;
+    }
+
+    /* ════════════════════════════════════════════════════════════════════
+       CREATE DATA ROW
+       isMaster: when true, all fields (except policyno/sn) are editable
+       ════════════════════════════════════════════════════════════════════ */
+    function createDataRow(entry, idx, isMaster) {
         const tr = document.createElement('tr');
         tr.dataset.entryId = entry.id;
         if (rowHeights[idx]) tr.style.height = rowHeights[idx] + 'px';
 
-        // Double left-click anywhere on the row → copy policy number
-        tr.addEventListener('dblclick', (e) => onRowDblClick(e, tr));
-
-        COLUMNS.forEach(col => {
+        // Determine which columns to render (skip status in master mode)
+        const activeCols = isMaster ? COLUMNS.filter(c => c.key !== 'status') : COLUMNS;
+        activeCols.forEach(col => {
             const td = document.createElement('td');
             td.className = `col-${col.key}`;
             if (rowHeights[idx]) td.style.height = rowHeights[idx] + 'px';
 
             if (col.type === 'index') {
-                td.classList.add('locked');
+                td.classList.add('locked', 'sn-delete');
+                td.dataset.entryId = entry.id;
                 td.style.position = 'relative';
+                td.style.cursor = 'pointer';
                 const span = document.createElement('span');
                 span.className = 'cell-content'; span.textContent = idx + 1;
                 td.appendChild(span);
@@ -334,13 +419,18 @@ const Spreadsheet = (() => {
                 td.appendChild(rh);
 
             } else if (col.key === 'policyno') {
-                td.classList.add('locked');
+                // Policy number: SELECTABLE but NOT editable
+                // Use 'policyno-cell' class so Navigation can select it, but no edit
+                td.classList.add('locked', 'policyno-selectable');
+                td.dataset.field = col.key;
+                td.dataset.entryId = entry.id;
                 const span = document.createElement('span');
                 span.className = 'cell-content';
                 span.textContent = entry.policyno || '';
                 td.appendChild(span);
 
             } else {
+                // All other columns: editable in BOTH master and monthly
                 td.classList.add('editable');
                 td.dataset.field = col.key;
                 td.dataset.entryId = entry.id;
@@ -350,19 +440,12 @@ const Spreadsheet = (() => {
                 if (col.type === 'status') { span.textContent = STATUS_LABELS[value] || value || 'Due'; addStatusClass(td, value); }
                 else { span.textContent = value; }
                 td.appendChild(span);
-
-                // Single right-click → edit (all columns)
-                attachEditRightClick(td, col, entry);
             }
 
             tr.appendChild(td);
         });
 
         return tr;
-    }
-
-    function attachEditRightClick(td, col, entry) {
-        td.addEventListener('contextmenu', (e) => onCellRightClick(e, td, col, entry));
     }
 
     /* ── Status keystroke map ───────────────────────────────────────────
@@ -387,7 +470,6 @@ const Spreadsheet = (() => {
 
     /* ── Start editing ───────────────────────────────────────────────── */
     function startEdit(td, col, entry, initialKey) {
-        // Status cells are handled entirely by Navigation
         if (col.type === 'status') return;
 
         td.classList.add('editing');
@@ -401,7 +483,6 @@ const Spreadsheet = (() => {
         const isNote = col.key.startsWith('note');
         const input = document.createElement('input');
         input.type = 'text'; input.className = 'cell-input';
-        // If initialKey provided, start with that character
         input.value = initialKey || value;
 
         input.addEventListener('blur', () => {
@@ -417,9 +498,13 @@ const Spreadsheet = (() => {
                 nv = `${dd}/${mm} - ${nv}`;
             }
 
-            if (nv !== value) { entry[col.key] = nv; saveCell(td, entry.id, col.key, nv); }
+            if (nv !== value) {
+                // Push to undo stack BEFORE saving
+                pushUndo(entry.id, col.key, value, nv);
+                entry[col.key] = nv;
+                saveCell(td, entry.id, col.key, nv);
+            }
             restoreCellDisplay(td, col, entry, nv);
-            // Re-select the cell in Navigation after edit
             if (typeof Navigation !== 'undefined') Navigation.selectCell(td);
         });
 
@@ -431,7 +516,6 @@ const Spreadsheet = (() => {
 
         td.appendChild(input); input.focus();
         if (initialKey) {
-            // Cursor at end when typing fresh
             input.setSelectionRange(input.value.length, input.value.length);
         } else {
             input.select();
@@ -446,15 +530,87 @@ const Spreadsheet = (() => {
         span.className = 'cell-content';
         span.textContent = (col.type === 'status') ? (STATUS_LABELS[value] || value || 'Due') : (value || '');
         td.appendChild(span);
-        attachEditRightClick(td, col, entry);
     }
 
+    /* ── Save cell: routes to correct API based on active tab ─────── */
     async function saveCell(td, entryId, field, value) {
         td.classList.add('saving'); td.classList.remove('saved');
-        const ok = await App.updateEntry(entryId, field, value);
+        let ok;
+        if (App.state.activeTab === 'master') {
+            ok = await App.updateMasterEntry(entryId, field, value);
+        } else {
+            ok = await App.updateEntry(entryId, field, value);
+        }
         td.classList.remove('saving');
         if (ok) { td.classList.add('saved'); setTimeout(() => td.classList.remove('saved'), 2000); }
     }
+
+    /* ── Extra row editing ─────────────────────────────────────────── */
+    function isExtraCell(td) {
+        return td && td.dataset.extraIdx !== undefined;
+    }
+
+    function startExtraEdit(td, initialKey) {
+        const extraIdx = parseInt(td.dataset.extraIdx);
+        const field = td.dataset.field;
+        const col = COLUMNS.find(c => c.key === field);
+        if (!col || isNaN(extraIdx)) return;
+
+        // Status cells in extra rows: use keystroke
+        if (col.type === 'status') return;
+
+        td.classList.add('editing');
+        td.innerHTML = '';
+        currentEditCell = td;
+        if (typeof Navigation !== 'undefined') Navigation.setEditing(true);
+
+        const oldValue = (extraRowData[extraIdx] || {})[field] || '';
+        const input = document.createElement('input');
+        input.type = 'text'; input.className = 'cell-input';
+        input.value = initialKey || oldValue;
+
+        input.addEventListener('blur', () => {
+            const val = input.value.trim();
+            finishEdit(td);
+            if (typeof Navigation !== 'undefined') Navigation.setEditing(false);
+
+            if (!extraRowData[extraIdx]) extraRowData[extraIdx] = {};
+            extraRowData[extraIdx][field] = val;
+
+            // Restore cell display
+            td.innerHTML = '';
+            const span = document.createElement('span');
+            span.className = 'cell-content';
+            if (col.type === 'status') {
+                if (val) {
+                    span.textContent = STATUS_LABELS[val] || val;
+                    addStatusClass(td, val);
+                }
+            } else {
+                span.textContent = val;
+            }
+            td.appendChild(span);
+
+            // Auto-commit when policy number is filled
+            if (field === 'policyno' && val) commitExtraRow(extraIdx);
+
+            if (typeof Navigation !== 'undefined') Navigation.selectCell(td);
+        });
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); input.blur(); }
+            if (e.key === 'Escape') { input.value = oldValue; input.blur(); }
+        });
+
+        td.appendChild(input); input.focus();
+        if (initialKey) {
+            input.setSelectionRange(input.value.length, input.value.length);
+        } else {
+            input.select();
+        }
+    }
+
+    function getExtraRowData() { return extraRowData; }
 
     function moveToNextEditable(currentTd, currentCol, currentEntry, reverse) {
         const tr = currentTd.closest('tr');
@@ -471,6 +627,92 @@ const Spreadsheet = (() => {
         if (entry && col) startEdit(nextTd, col, entry);
     }
 
+    /* ════════════════════════════════════════════════════════════════════
+       EVENT DELEGATION — single listeners on tbody for performance
+       ════════════════════════════════════════════════════════════════════ */
+    function initDelegation() {
+        const tbody = document.getElementById('spreadsheet-body');
+        if (!tbody) return;
+
+        // Right-click → edit cell (delegated — works for both data rows and extra rows)
+        tbody.addEventListener('contextmenu', (e) => {
+            const td = e.target.closest('td.editable');
+            if (!td) return;
+            e.preventDefault();
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            if (td.classList.contains('editing')) return;
+
+            closeActiveEdit();
+
+            // Check if this is an extra row cell
+            if (isExtraCell(td)) {
+                startExtraEdit(td);
+                return;
+            }
+
+            // Regular data row
+            const field = td.dataset.field;
+            const entryId = parseInt(td.dataset.entryId);
+            const col = COLUMNS.find(c => c.key === field);
+            const entry = App.state.entries.find(en => en.id === entryId);
+            if (col && entry) startEdit(td, col, entry);
+        });
+
+        // Click SN cell → delete row with confirmation
+        tbody.addEventListener('click', (e) => {
+            const snTd = e.target.closest('td.sn-delete');
+            if (!snTd) return;
+
+            // Extra row: clear the extra row data
+            if (snTd.dataset.extraIdx !== undefined) {
+                const extraIdx = parseInt(snTd.dataset.extraIdx);
+                const data = extraRowData[extraIdx];
+                if (data && Object.keys(data).some(k => data[k])) {
+                    // Has data — clear it
+                    delete extraRowData[extraIdx];
+                    const tr = snTd.closest('tr.extra-row');
+                    if (tr) {
+                        tr.querySelectorAll('td.editable .cell-content').forEach(span => {
+                            span.textContent = '';
+                        });
+                        // Clear status class
+                        tr.querySelectorAll('td.col-status').forEach(td => {
+                            td.className = td.className.replace(/status-\w+/g, '').trim();
+                        });
+                    }
+                    App.toast('Row cleared', 'info', 1500);
+                }
+                return;
+            }
+
+            // Data row: delete from DB
+            const tr = snTd.closest('tr[data-entry-id]');
+            if (!tr) return;
+            const entryId = parseInt(tr.dataset.entryId);
+            const entry = App.state.entries.find(en => en.id === entryId);
+            if (!entry) return;
+
+            const pno = entry.policyno || 'Unknown';
+            const name = entry.name || '';
+            App.showConfirm(
+                `Delete row?`,
+                `Policy: ${pno}${name ? ' — ' + name : ''}\nThis will permanently remove this entry.`,
+                async () => {
+                    await App.deleteEntry(entryId);
+                }
+            );
+        });
+
+        // Hover tracking for Ctrl+C (both data and extra rows)
+        tbody.addEventListener('mouseover', (e) => {
+            const tr = e.target.closest('tr');
+            if (tr) _hoveredRow = tr;
+        });
+        tbody.addEventListener('mouseleave', () => {
+            _hoveredRow = null;
+        });
+    }
+
     /* ── Close edit when clicking outside ─────────────────────────── */
     document.addEventListener('mousedown', (e) => {
         if (!currentEditCell) return;
@@ -478,20 +720,23 @@ const Spreadsheet = (() => {
         closeActiveEdit();
     });
 
+    /* ── Init delegation once DOM ready ──────────────────────────── */
+    document.addEventListener('DOMContentLoaded', initDelegation);
+
     /* ── Realtime Clock ────────────────────────────────────────────── */
     function startClock() {
         const el = document.getElementById('realtime-clock');
         if (!el) return;
         function tick() {
             const now = new Date();
-            const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
             const dd = String(now.getDate()).padStart(2, '0');
             const mm = String(now.getMonth() + 1).padStart(2, '0');
             const yyyy = now.getFullYear();
-            const hh = String(now.getHours()).padStart(2, '0');
+            let h = now.getHours();
+            const ampm = h >= 12 ? 'pm' : 'am';
+            h = h % 12 || 12;
             const min = String(now.getMinutes()).padStart(2, '0');
-            const ss = String(now.getSeconds()).padStart(2, '0');
-            el.textContent = `${days[now.getDay()]}  ${dd}/${mm}/${yyyy}  ${hh}:${min}:${ss}`;
+            el.innerHTML = `<span class="clock-time">${h}:${min} <span class="clock-ampm">${ampm}</span></span><span class="clock-date">${dd}-${mm}-${yyyy}</span>`;
         }
         tick();
         setInterval(tick, 1000);
@@ -500,12 +745,23 @@ const Spreadsheet = (() => {
 
     return {
         render,
+        invalidateCache,
+        getCurrentSheetKey,
         COLUMNS,
         // Exposed for Navigation module
         _saveCell: saveCell,
         _restoreCell: restoreCellDisplay,
         _addStatusClass: addStatusClass,
         _startEdit: startEdit,
+        _startExtraEdit: startExtraEdit,
+        _isExtraCell: isExtraCell,
+        _getExtraRowData: getExtraRowData,
         _finishEdit: finishEdit,
+        // Undo
+        undo,
+        pushUndo,
+        // Hover tracking
+        getHoveredRow: () => _hoveredRow,
+        copyPolicyNo,
     };
 })();
