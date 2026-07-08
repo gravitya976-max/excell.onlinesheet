@@ -218,8 +218,8 @@ async def sms_queue_poll(x_gateway_key: Optional[str] = Header(None)):
         sent_today = conn.execute(
             "SELECT COUNT(*) as cnt FROM sms_logs WHERE sent_at >= ?", (cutoff,)
         ).fetchone()
-        if (sent_today or {}).get("cnt", 0) >= 60:
-            return {"job": None, "reason": "daily_limit", "limit": 60}
+        if (sent_today or {}).get("cnt", 0) >= 50:
+            return {"job": None, "reason": "daily_limit", "limit": 50}
 
         # Check 60-second gap since last send
         last_sent = conn.execute(
@@ -348,8 +348,8 @@ async def sms_queue_status():
         "total": pending + processing, "done": total_sent, "failed": total_failed,
         "processing": processing, "pending": pending,
         "current": current, "items": rows, "logs": log_items,
-        "sent_today": sent_today, "daily_limit": 60,
-        "daily_remaining": max(0, 60 - sent_today)
+        "sent_today": sent_today, "daily_limit": 50,
+        "daily_remaining": max(0, 50 - sent_today)
     }
 
 

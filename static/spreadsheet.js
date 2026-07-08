@@ -645,9 +645,9 @@ const Spreadsheet = (() => {
         td.setAttribute('tabindex', '0');
         td.focus();
         const tr = td.closest('tr');
-        if (tr) tr.classList.add('nav-active-row');
+        if (tr && !document.body.classList.contains('crm-sms-active')) tr.classList.add('nav-active-row');
         const table = td.closest('.spreadsheet');
-        if (table) table.classList.add('nav-has-selection');
+        if (table && !document.body.classList.contains('crm-sms-active')) table.classList.add('nav-has-selection');
     }
 
     function deselectCell() {

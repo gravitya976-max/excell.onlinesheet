@@ -20,13 +20,17 @@ const CRM = (() => {
     let gatewayOnline = false;  // tracks whether SMS/call gateway is reachable
     let activeTab = 'select'; // 'select' | 'history'
     let _historyCache = null;  // cached history HTML for instant tab switch
-    let _queueCache = null;    // cached queue HTML for instant load
 
     // ── DOM refs ──────────────────────────────────────────────────────
     const $  = (s) => document.querySelector(s);
     const $$ = (s) => document.querySelectorAll(s);
 
     // ── Init ──────────────────────────────────────────────────────────
+    // ── Drag-select state ─────────────────────────────────────────────
+    let _dragging = false;
+    let _dragAction = null;  // 'select' or 'deselect'
+    let _dragTouched = new Set(); // policy_nos already toggled in this drag
+
     function init() {
         // Mode buttons
         $('#crm-sms-btn')?.addEventListener('click', () => toggleMode('sms'));
@@ -55,9 +59,129 @@ const CRM = (() => {
         // Hook into row clicks
         document.addEventListener('click', onRowClick);
 
+        // ── Drag-select for SMS mode ─────────────────────────────────
+        document.addEventListener('mousedown', onDragStart);
+        document.addEventListener('mousemove', onDragMove);
+        document.addEventListener('mouseup', onDragEnd);
+
         // Gateway status polling (60s — avoids log flooding)
         pollGateway();
         gatewayTimer = setInterval(pollGateway, 60000);
+    }
+
+    // ── Drag-select handlers ────────────────────────────────────────
+    let _renderRaf = null;
+    function _scheduleRender() {
+        if (_renderRaf) return;
+        _renderRaf = requestAnimationFrame(() => {
+            _renderRaf = null;
+            renderFloatBox();
+        });
+    }
+
+    function onDragStart(e) {
+        if (mode !== 'sms' || isSending) return;
+        if (App.state.activeTab !== 'list') return;
+        if (e.button !== 0) return; // left-click only
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON') return;
+
+        const tr = e.target.closest('tbody tr[data-entry-id]');
+        if (!tr) return;
+
+        // Prevent native text selection / drag behavior
+        e.preventDefault();
+
+        _dragging = true;
+        _dragTouched.clear();
+
+        // Determine action: if row is already selected → deselect mode, else → select mode
+        const pno = _getPolicyFromRow(tr);
+        const alreadySelected = pno && selectedContacts.some(c => c.policy_no === pno);
+        _dragAction = alreadySelected ? 'deselect' : 'select';
+
+        // Block all text selection during drag
+        document.body.style.userSelect = 'none';
+        document.body.style.webkitUserSelect = 'none';
+        document.addEventListener('selectstart', _preventSelect);
+
+        // Process this first row
+        _dragProcessRow(tr);
+    }
+
+    function _preventSelect(e) { e.preventDefault(); }
+
+    function onDragMove(e) {
+        if (!_dragging) return;
+
+        const tr = document.elementFromPoint(e.clientX, e.clientY)?.closest('tbody tr[data-entry-id]');
+        if (!tr) return;
+
+        _dragProcessRow(tr);
+    }
+
+    function onDragEnd(e) {
+        if (!_dragging) return;
+        _dragging = false;
+        document.removeEventListener('selectstart', _preventSelect);
+        document.body.style.userSelect = '';
+        document.body.style.webkitUserSelect = '';
+        // Clear any lingering text selection
+        window.getSelection()?.removeAllRanges();
+    }
+
+    function _getPolicyFromRow(tr) {
+        const td = tr.querySelector('.col-policyno');
+        const span = td?.querySelector('.cell-content');
+        return span?.textContent?.trim() || '';
+    }
+
+    function _dragProcessRow(tr) {
+        const pno = _getPolicyFromRow(tr);
+        if (!pno || _dragTouched.has(pno)) return;
+        _dragTouched.add(pno);
+
+        if (_dragAction === 'select') {
+            // Only add if not already selected
+            if (selectedContacts.some(c => c.policy_no === pno)) return;
+            const entry = readEntryFromRow(tr);
+            if (!entry) return;
+            const mobile = entry.mobileno || '';
+            if (!mobile) return; // skip rows without mobile
+
+            const statusRaw = (entry.status || '').trim().toLowerCase();
+            const statusLabel = (statusRaw === 'autodebit' || statusRaw === 'auto debit')
+                ? 'Auto Debit' : 'Due';
+
+            selectedContacts.push({
+                policy_no: pno,
+                name: entry.name || '',
+                mobile: mobile,
+                premium: entry.premium || '',
+                fup: entry.fup || '',
+                doc: entry.doc || '',
+                status: statusLabel,
+                rowEl: tr,
+            });
+            tr.classList.add('crm-selected');
+        } else {
+            // Deselect
+            const idx = selectedContacts.findIndex(c => c.policy_no === pno);
+            if (idx < 0) return;
+            selectedContacts.splice(idx, 1);
+            tr.classList.remove('crm-selected');
+        }
+
+        // Schedule float box rebuild on next animation frame (batches during fast drag)
+        _scheduleRender();
+
+        // Make float box visible if first selection
+        if (selectedContacts.length > 0) {
+            const box = $('#crm-float-box');
+            if (box && !box.classList.contains('visible')) {
+                box.classList.add('visible');
+                if (activeTab !== 'select') switchTab('select');
+            }
+        }
     }
 
     // ── Tabs ──────────────────────────────────────────────────────────
@@ -83,81 +207,225 @@ const CRM = (() => {
     }
 
     // ── History ──────────────────────────────────────────────────────
+    let _historyFilter = 'queue'; // 'queue' | 'sms' | 'call'
+    let _smsLogs = [];
+    let _callLogs = [];
+    let _queueData = null;
+
     async function loadHistory() {
         const list = $('#crm-float-list');
         if (!list) return;
-        list.innerHTML = '<div style="text-align:center;padding:20px;color:#8b92a5;font-size:12px">Loading...</div>';
+
+        _renderHistoryShell(list);
 
         try {
-            const [smsData, callData] = await Promise.all([
+            const [smsData, callData, queueData] = await Promise.all([
                 App.api('GET', '/api/sms/logs'),
                 App.api('GET', '/api/calls/logs'),
+                App.api('GET', '/api/sms/queue/status'),
             ]);
 
-            const smsLogs = (smsData.logs || []).map(l => ({ ...l, type: 'sms' }));
-            const callLogs = (callData.logs || []).map(l => ({ ...l, type: 'call', sent_at: l.triggered_at }));
+            _smsLogs = (smsData.logs || []).map(l => ({ ...l, type: 'sms' }));
+            _callLogs = (callData.logs || []).map(l => ({ ...l, type: 'call', sent_at: l.triggered_at }));
+            _queueData = queueData;
 
-            // Merge and sort by time desc
-            const all = [...smsLogs, ...callLogs].sort((a, b) => {
-                const ta = a.sent_at || a.triggered_at || '';
-                const tb = b.sent_at || b.triggered_at || '';
-                return tb.localeCompare(ta);
-            });
+            _smsLogs.sort((a, b) => (b.sent_at || '').localeCompare(a.sent_at || ''));
+            _callLogs.sort((a, b) => (b.sent_at || '').localeCompare(a.sent_at || ''));
 
-            list.innerHTML = '';
-            // Will cache the final HTML below
-
-            if (all.length === 0) {
-                list.innerHTML = '<div style="text-align:center;padding:30px;color:#8b92a5;font-size:12px">No history yet</div>';
-                return;
-            }
-
-            // Group by date
-            const groups = {};
-            all.forEach(log => {
-                const dateKey = getDateLabel(log.sent_at || log.triggered_at || '');
-                if (!groups[dateKey]) groups[dateKey] = [];
-                groups[dateKey].push(log);
-            });
-
-            Object.entries(groups).forEach(([dateLabel, logs]) => {
-                // Date group header
-                const header = document.createElement('div');
-                header.className = 'crm-history-date';
-                header.textContent = dateLabel;
-                list.appendChild(header);
-
-                logs.forEach(log => {
-                    const div = document.createElement('div');
-                    div.className = 'crm-float-item';
-                    const time = formatTime(log.sent_at || log.triggered_at || '');
-                    const icon = log.type === 'sms' ? '💬' : '📞';
-                    const statusBadge = log.type === 'sms'
-                        ? `<span class="${log.status === 'sent' ? 'crm-badge-sent' : 'crm-badge-failed'}">${log.status}</span>`
-                        : '<span class="crm-badge-sent">called</span>';
-
-                    // Message preview for SMS (truncated)
-                    const msgPreview = log.type === 'sms' && log.message
-                        ? `<div class="crm-history-preview">${esc(log.message.substring(0, 80))}${log.message.length > 80 ? '...' : ''}</div>`
-                        : '';
-
-                    div.innerHTML = `
-                        <div class="crm-float-item-info">
-                            <div class="crm-float-item-name">${icon} ${esc(log.name)}</div>
-                            <div class="crm-float-item-meta">
-                                ${esc(log.policy_no)} · ${esc(log.mobile || '')} · ${statusBadge} · <span style="color:#8b92a5">${time}</span>
-                            </div>
-                            ${msgPreview}
-                        </div>
-                    `;
-                    list.appendChild(div);
-                });
-            });
-            // Cache the built HTML for instant re-show
+            _renderHistoryContent();
             _historyCache = list.innerHTML;
         } catch (err) {
-            list.innerHTML = `<div style="text-align:center;padding:20px;color:#d04040;font-size:12px">Failed to load</div>`;
+            const content = list.querySelector('.crm-history-content');
+            if (content) content.innerHTML = `<div style="text-align:center;padding:20px;color:#d04040;font-size:12px">Failed to load</div>`;
         }
+    }
+
+    /** Refresh only queue data (for auto-refresh timer) */
+    async function _refreshQueueData() {
+        try {
+            _queueData = await App.api('GET', '/api/sms/queue/status');
+            if (_historyFilter === 'queue') _renderHistoryContent();
+        } catch {}
+    }
+
+    function _renderHistoryShell(list) {
+        const queueSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 4 3 9 8 9"/><polyline points="12 7 12 12 15 15"/></svg>`;
+        const smsSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><circle cx="9" cy="10" r="0.5" fill="currentColor"/><circle cx="12" cy="10" r="0.5" fill="currentColor"/><circle cx="15" cy="10" r="0.5" fill="currentColor"/></svg>`;
+        const callSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>`;
+
+        list.innerHTML = `
+            <div class="crm-history-toggles">
+                <button class="crm-history-toggle ${_historyFilter === 'queue' ? 'active' : ''}" data-filter="queue">${queueSvg} Queue</button>
+                <button class="crm-history-toggle ${_historyFilter === 'sms' ? 'active' : ''}" data-filter="sms">${smsSvg} SMS</button>
+                <button class="crm-history-toggle ${_historyFilter === 'call' ? 'active' : ''}" data-filter="call">${callSvg} Calls</button>
+            </div>
+            <div class="crm-history-content"><div style="text-align:center;padding:20px;color:#8b92a5;font-size:12px">Loading...</div></div>
+        `;
+
+        list.querySelectorAll('.crm-history-toggle').forEach(btn => {
+            btn.addEventListener('click', () => {
+                _historyFilter = btn.dataset.filter;
+                list.querySelectorAll('.crm-history-toggle').forEach(b => b.classList.toggle('active', b.dataset.filter === _historyFilter));
+                _renderHistoryContent();
+                _historyCache = list.innerHTML;
+            });
+        });
+    }
+
+    function _renderHistoryContent() {
+        const content = document.querySelector('.crm-history-content');
+        if (!content) return;
+
+        if (_historyFilter === 'queue') {
+            _renderQueueContent(content);
+        } else {
+            const logs = _historyFilter === 'sms' ? _smsLogs : _callLogs;
+            if (logs.length === 0) {
+                content.innerHTML = `<div style="text-align:center;padding:30px;color:#8b92a5;font-size:12px">No ${_historyFilter === 'sms' ? 'SMS' : 'call'} history yet</div>`;
+                return;
+            }
+            const frag = document.createDocumentFragment();
+            _buildLogSection(frag, logs);
+            content.innerHTML = '';
+            content.appendChild(frag);
+        }
+    }
+
+    function _renderQueueContent(content) {
+        if (!_queueData) {
+            content.innerHTML = '<div style="text-align:center;padding:20px;color:#8b92a5;font-size:12px">Loading...</div>';
+            return;
+        }
+        const data = _queueData;
+        const items = data.items || [];
+        const logs = data.logs || [];
+        const pending = items.filter(i => i.status === 'pending' || i.status === 'processing');
+        const done = data.done || 0;
+        const failed = data.failed || 0;
+        const sentToday = data.sent_today || 0;
+        const dailyLimit = data.daily_limit || 50;
+
+        const frag = document.createDocumentFragment();
+
+        // Stats bar
+        const stats = document.createElement('div');
+        stats.className = 'crm-queue-stats';
+        stats.innerHTML = `
+            <div class="crm-stat"><span class="crm-stat-num">${pending.length}</span><span class="crm-stat-label">Pending</span></div>
+            <div class="crm-stat"><span class="crm-stat-num crm-stat-done">${done}</span><span class="crm-stat-label">Sent</span></div>
+            <div class="crm-stat"><span class="crm-stat-num crm-stat-fail">${failed}</span><span class="crm-stat-label">Failed</span></div>
+            <div class="crm-stat"><span class="crm-stat-num">${sentToday}/${dailyLimit}</span><span class="crm-stat-label">Today</span></div>
+        `;
+        frag.appendChild(stats);
+
+        // Pending items with cancel
+        if (pending.length > 0) {
+            const lbl = document.createElement('div');
+            lbl.className = 'crm-queue-section-label';
+            lbl.textContent = 'Pending (' + pending.length + ')';
+            frag.appendChild(lbl);
+
+            pending.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'crm-float-item';
+                div.innerHTML = '<div class="crm-float-item-info"><div class="crm-float-item-name">' + esc(item.name) + '</div><div class="crm-float-item-meta">' + esc(item.policy_no) + ' · <span class="crm-badge-pending">' + item.status + '</span></div></div><button class="crm-cancel-item" title="Cancel">✕</button>';
+                div.querySelector('.crm-cancel-item').addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    try {
+                        await App.api('DELETE', '/api/sms/queue/' + item.id);
+                        App.toast('Cancelled: ' + item.name, 'success', 2000);
+                        _refreshQueueData();
+                    } catch (err) { App.toast('Cancel failed', 'error'); }
+                });
+                frag.appendChild(div);
+            });
+        }
+
+        // Recent logs
+        if (logs.length > 0) {
+            const lbl2 = document.createElement('div');
+            lbl2.className = 'crm-queue-section-label';
+            lbl2.textContent = 'Recent (' + logs.length + ')';
+            frag.appendChild(lbl2);
+
+            logs.forEach(log => {
+                const div = document.createElement('div');
+                div.className = 'crm-float-item';
+                const badge = log.status === 'sent' ? '<span class="crm-badge-sent">sent</span>' : '<span class="crm-badge-failed">failed</span>';
+                const time = formatTime(log.sent_at || '');
+                div.innerHTML = '<div class="crm-float-item-info"><div class="crm-float-item-name">' + esc(log.name) + '</div><div class="crm-float-item-meta">' + esc(log.policy_no) + ' · ' + badge + ' · <span style="color:#8b92a5">' + time + '</span></div></div>';
+                frag.appendChild(div);
+            });
+        }
+
+        if (pending.length === 0 && logs.length === 0) {
+            const empty = document.createElement('div');
+            empty.style.cssText = 'text-align:center;padding:20px;color:#8b92a5;font-size:12px';
+            empty.textContent = 'No messages in queue';
+            frag.appendChild(empty);
+        }
+
+        content.innerHTML = '';
+        content.appendChild(frag);
+
+        // Cancel all button in footer
+        const footer = $('#crm-float-footer');
+        if (footer && pending.length > 0) {
+            footer.style.display = '';
+            footer.innerHTML = '<button class="crm-send-btn crm-cancel-all-btn" id="crm-cancel-all">Cancel All (' + pending.length + ')</button>';
+            document.getElementById('crm-cancel-all').addEventListener('click', async () => {
+                try {
+                    await App.api('DELETE', '/api/sms/queue');
+                    App.toast('All pending cancelled', 'success', 2000);
+                    _refreshQueueData();
+                } catch (err) { App.toast('Cancel failed', 'error'); }
+            });
+        } else if (footer) {
+            footer.innerHTML = '';
+        }
+    }
+
+    /** Build date-grouped log entries into a DocumentFragment */
+    function _buildLogSection(frag, logs) {
+        // Group by date
+        const groups = {};
+        logs.forEach(log => {
+            const dateKey = getDateLabel(log.sent_at || log.triggered_at || '');
+            if (!groups[dateKey]) groups[dateKey] = [];
+            groups[dateKey].push(log);
+        });
+
+        Object.entries(groups).forEach(([dateLabel, items]) => {
+            const header = document.createElement('div');
+            header.className = 'crm-history-date';
+            header.textContent = dateLabel;
+            frag.appendChild(header);
+
+            items.forEach(log => {
+                const div = document.createElement('div');
+                div.className = 'crm-float-item';
+                const time = formatTime(log.sent_at || log.triggered_at || '');
+                const statusBadge = log.type === 'sms'
+                    ? `<span class="${log.status === 'sent' ? 'crm-badge-sent' : 'crm-badge-failed'}">${log.status}</span>`
+                    : '<span class="crm-badge-sent">called</span>';
+
+                // Message preview for SMS (truncated)
+                const msgPreview = log.type === 'sms' && log.message
+                    ? `<div class="crm-history-preview">${esc(log.message.substring(0, 80))}${log.message.length > 80 ? '...' : ''}</div>`
+                    : '';
+
+                div.innerHTML = `
+                    <div class="crm-float-item-info">
+                        <div class="crm-float-item-name">${esc(log.name)}</div>
+                        <div class="crm-float-item-meta">
+                            ${esc(log.policy_no)} · ${esc(log.mobile || '')} · ${statusBadge} · <span style="color:#8b92a5">${time}</span>
+                        </div>
+                        ${msgPreview}
+                    </div>
+                `;
+                frag.appendChild(div);
+            });
+        });
     }
 
     function getDateLabel(ts) {
@@ -177,7 +445,8 @@ const CRM = (() => {
     function formatTime(ts) {
         if (!ts) return '';
         try {
-            const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T'));
+            // Append 'Z' so SQLite's UTC CURRENT_TIMESTAMP is parsed as UTC
+            const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z');
             return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
         } catch { return ts; }
     }
@@ -243,6 +512,9 @@ const CRM = (() => {
         if (mode === 'call') { callBtn?.classList.add('active-call'); addCloseBadge(callBtn); }
         if (queueOpen) { queueBtn?.classList.add('active-queue'); addCloseBadge(queueBtn); }
 
+        // Toggle body class to suppress spreadsheet row highlight during SMS mode
+        document.body.classList.toggle('crm-sms-active', mode === 'sms');
+
         if (mode !== 'sms' && !queueOpen) {
             $('#crm-float-box')?.classList.remove('visible');
         }
@@ -256,6 +528,12 @@ const CRM = (() => {
         const tr = e.target.closest('tbody tr[data-entry-id]');
         if (!tr) return;
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+        // Skip if this row was already handled by drag-select
+        if (mode === 'sms' && _dragTouched.size > 0) {
+            const pno = _getPolicyFromRow(tr);
+            if (_dragTouched.has(pno)) return;
+        }
 
         // Always read from DOM (reflects edits + newly added rows)
         let entry = readEntryFromRow(tr);
@@ -352,8 +630,9 @@ const CRM = (() => {
 
         const list = $('#crm-float-list');
         if (!list) return;
-        list.innerHTML = '';
 
+        // Use DocumentFragment for batch DOM update — prevents reflow lag with 50+ items
+        const frag = document.createDocumentFragment();
         selectedContacts.forEach((c, i) => {
             const item = document.createElement('div');
             item.className = 'crm-float-item';
@@ -368,8 +647,10 @@ const CRM = (() => {
                 <button class="crm-remove" data-idx="${i}" title="Remove">×</button>
             `;
             item.querySelector('.crm-remove').addEventListener('click', () => removeContact(i));
-            list.appendChild(item);
+            frag.appendChild(item);
         });
+        list.innerHTML = '';
+        list.appendChild(frag);
 
         // Auto-scroll to show latest selection
         list.scrollTop = list.scrollHeight;
@@ -529,9 +810,9 @@ const CRM = (() => {
         if (footer) {
             const remaining = data.daily_remaining ?? '';
             const sentToday = data.sent_today ?? 0;
-            let msg = `Next send in ~60s · Today: ${sentToday}/60`;
+            let msg = `Next send in ~60s · Today: ${sentToday}/50`;
             if (remaining <= 0 && data.pending > 0) {
-                msg = `⚠ Daily limit reached (60/day). ${data.pending} queued for tomorrow.`;
+                msg = `⚠ Daily limit reached (50/day). ${data.pending} queued for tomorrow.`;
             }
             footer.innerHTML = `<div class="crm-countdown">${msg}</div>`;
         }
@@ -681,119 +962,16 @@ const CRM = (() => {
                 btn.appendChild(x);
             }
             box?.classList.add('visible');
-            // Show cache instantly, refresh in background
-            if (_queueCache) {
-                const list = $('#crm-float-list');
-                if (list) list.innerHTML = _queueCache;
-            }
-            loadQueueView();
-            queueRefreshTimer = setInterval(loadQueueView, 5000);
+            // Switch to history tab with queue filter
+            _historyFilter = 'queue';
+            switchTab('history');
+            queueRefreshTimer = setInterval(_refreshQueueData, 5000);
         } else {
             btn?.classList.remove('active-queue');
             const oldX2 = btn?.querySelector('.crm-close-x');
             if (oldX2) oldX2.remove();
             box?.classList.remove('visible');
             if (queueRefreshTimer) { clearInterval(queueRefreshTimer); queueRefreshTimer = null; }
-        }
-    }
-
-    async function loadQueueView() {
-        const header = $('#crm-float-count');
-        const list = $('#crm-float-list');
-        const footer = $('#crm-float-footer');
-        const tabs = document.querySelector('.crm-float-tabs');
-
-        if (header) header.textContent = 'Queue';
-        if (tabs) tabs.style.display = 'none';
-
-        try {
-            const data = await App.api('GET', '/api/sms/queue/status');
-            const items = data.items || [];
-            const logs = data.logs || [];
-            const pending = items.filter(i => i.status === 'pending' || i.status === 'processing');
-            const done = data.done || 0;
-            const failed = data.failed || 0;
-            const sentToday = data.sent_today || 0;
-            const dailyLimit = data.daily_limit || 60;
-
-            if (list) {
-                list.innerHTML = '';
-
-                // Stats bar
-                const stats = document.createElement('div');
-                stats.className = 'crm-queue-stats';
-                stats.innerHTML = `
-                    <div class="crm-stat"><span class="crm-stat-num">${pending.length}</span><span class="crm-stat-label">Pending</span></div>
-                    <div class="crm-stat"><span class="crm-stat-num crm-stat-done">${done}</span><span class="crm-stat-label">Sent</span></div>
-                    <div class="crm-stat"><span class="crm-stat-num crm-stat-fail">${failed}</span><span class="crm-stat-label">Failed</span></div>
-                    <div class="crm-stat"><span class="crm-stat-num">${sentToday}/${dailyLimit}</span><span class="crm-stat-label">Today</span></div>
-                `;
-                list.appendChild(stats);
-
-                // Pending items with cancel
-                if (pending.length > 0) {
-                    const lbl = document.createElement('div');
-                    lbl.className = 'crm-queue-section-label';
-                    lbl.textContent = 'Pending (' + pending.length + ')';
-                    list.appendChild(lbl);
-
-                    pending.forEach(item => {
-                        const div = document.createElement('div');
-                        div.className = 'crm-float-item';
-                        div.innerHTML = '<div class="crm-float-item-info"><div class="crm-float-item-name">' + esc(item.name) + '</div><div class="crm-float-item-meta">' + esc(item.policy_no) + ' · <span class="crm-badge-pending">' + item.status + '</span></div></div><button class="crm-cancel-item" title="Cancel">✕</button>';
-                        div.querySelector('.crm-cancel-item').addEventListener('click', async (e) => {
-                            e.stopPropagation();
-                            try {
-                                await App.api('DELETE', '/api/sms/queue/' + item.id);
-                                App.toast('Cancelled: ' + item.name, 'success', 2000);
-                                loadQueueView();
-                            } catch (err) { App.toast('Cancel failed', 'error'); }
-                        });
-                        list.appendChild(div);
-                    });
-                }
-
-                // Completed items from logs
-                if (logs.length > 0) {
-                    const lbl2 = document.createElement('div');
-                    lbl2.className = 'crm-queue-section-label';
-                    lbl2.textContent = 'Recent (' + logs.length + ')';
-                    list.appendChild(lbl2);
-
-                    logs.forEach(log => {
-                        const div = document.createElement('div');
-                        div.className = 'crm-float-item';
-                        const badge = log.status === 'sent' ? '<span class="crm-badge-sent">sent</span>' : '<span class="crm-badge-failed">failed</span>';
-                        const time = formatTime(log.sent_at || '');
-                        div.innerHTML = '<div class="crm-float-item-info"><div class="crm-float-item-name">' + esc(log.name) + '</div><div class="crm-float-item-meta">' + esc(log.policy_no) + ' · ' + badge + ' · <span style="color:#8b92a5">' + time + '</span></div></div>';
-                        list.appendChild(div);
-                    });
-                }
-
-                if (pending.length === 0 && logs.length === 0) {
-                    const empty = document.createElement('div');
-                    empty.style.cssText = 'text-align:center;padding:20px;color:#8b92a5;font-size:12px';
-                    empty.textContent = 'No messages in queue';
-                    list.appendChild(empty);
-                }
-            }
-
-            if (footer && pending.length > 0) {
-                footer.innerHTML = '<button class="crm-send-btn crm-cancel-all-btn" id="crm-cancel-all">Cancel All (' + pending.length + ')</button>';
-                document.getElementById('crm-cancel-all').addEventListener('click', async () => {
-                    try {
-                        await App.api('DELETE', '/api/sms/queue');
-                        App.toast('All pending cancelled', 'success', 2000);
-                        loadQueueView();
-                    } catch (err) { App.toast('Cancel failed', 'error'); }
-                });
-            } else if (footer) {
-                footer.innerHTML = '';
-            }
-            // Cache queue HTML for instant re-show
-            if (list) _queueCache = list.innerHTML;
-        } catch (err) {
-            if (list) list.innerHTML = '<div style="text-align:center;padding:20px;color:#d04040;font-size:12px">Failed to load queue</div>';
         }
     }
 
