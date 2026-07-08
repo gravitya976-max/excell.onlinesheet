@@ -86,7 +86,7 @@ const App = (() => {
     function switchTab(tab) {
         if (state.activeTab === tab) return;
         state.activeTab = tab;
-        clearSearchInput();
+        // Don't clear search — persist across tabs
 
         document.querySelectorAll('.tab').forEach(t => {
             if (t.dataset.tab === tab) {
@@ -151,6 +151,9 @@ const App = (() => {
         $('#info-generated-at').textContent = '';
         $('#footer-count').textContent = '0 rows';
         updateStatPills(0, 0, 0);
+        // Button shows "Generate" when no sheet
+        const btn = $('#btn-generate');
+        if (btn) btn.textContent = 'Generate';
     }
 
     function showListState(entries, meta) {
@@ -158,13 +161,16 @@ const App = (() => {
         $('#scroll-container').classList.remove('hidden');
         $('#info-count').textContent = `${entries.length} policies`;
         $('#info-generated-at').textContent = meta && meta.generated_at
-            ? `Generated: ${new Date(meta.generated_at).toLocaleString()}` : '';
+            ? `Last refreshed: ${new Date(meta.generated_at).toLocaleString()}` : '';
         $('#footer-count').textContent = `${entries.length} rows`;
         const dueCount = entries.filter(e => {
             const s = (e.status || '').trim().toLowerCase();
             return s === '' || s === 'due';
         }).length;
         updateStatPills(entries.length, dueCount, entries.length - dueCount);
+        // Button shows "↻ Refresh" when sheet exists
+        const btn = $('#btn-generate');
+        if (btn) btn.textContent = '↻ Refresh';
     }
 
     function showMasterState(entries) {
@@ -215,16 +221,27 @@ const App = (() => {
 
     // ── Generate list ─────────────────────────────────────────────────
     async function generateList() {
-        showLoading('Generating monthly list...');
+        const isRefresh = _hasMonthlyEntries();
+        showLoading(isRefresh ? 'Refreshing data...' : 'Generating monthly list...');
         try {
             const data = await api('POST', `/api/generate?year=${state.year}&month=${state.month}`);
-            toast(`List generated: ${data.filtered_count} policies due`, 'success');
+            let msg = data.is_refresh
+                ? `Refreshed: ${data.filtered_count} policies`
+                : `Generated: ${data.filtered_count} policies due`;
+            if (data.removed > 0) msg += `, ${data.removed} removed`;
+            toast(msg, 'success');
             // Re-fetch this month's data to update DataStore
             const freshData = await api('GET', `/api/list/${state.year}/${state.month}`);
             DataStore.setMonthlyData(state.year, state.month, freshData.entries || [], freshData.list);
             renderCurrentView();
-        } catch (e) { toast(`Generate failed: ${e.message}`, 'error'); }
+        } catch (e) { toast(`${isRefresh ? 'Refresh' : 'Generate'} failed: ${e.message}`, 'error'); }
         hideLoading();
+    }
+
+    /** Check if current month already has entries */
+    function _hasMonthlyEntries() {
+        const entries = DataStore.getView('list', state.year, state.month);
+        return entries && entries.length > 0;
     }
 
     // ── Search / filter ───────────────────────────────────────────────
@@ -233,6 +250,9 @@ const App = (() => {
 
     function doSearch(query) {
         _filterText = (query || '').trim().toLowerCase();
+        // Show/hide clear button
+        const clearBtn = $('#search-clear');
+        if (clearBtn) clearBtn.classList.toggle('hidden', !_filterText);
         applyFilter(_filterText);
     }
 
@@ -252,6 +272,8 @@ const App = (() => {
         Spreadsheet.render(filtered);
     }
 
+    function getFilterText() { return _filterText; }
+
     function clearSearchInput() {
         const inp = $('#search-input');
         if (inp) inp.value = '';
@@ -260,6 +282,8 @@ const App = (() => {
 
     function clearSearch() {
         clearSearchInput();
+        const clearBtn = $('#search-clear');
+        if (clearBtn) clearBtn.classList.add('hidden');
         applyFilter('');
     }
 
@@ -396,11 +420,14 @@ const App = (() => {
         $('#hit-prev').addEventListener('click', prevMonth);
         $('#hit-next').addEventListener('click', nextMonth);
 
-        // Generate
+        // Generate / Refresh
         $('#btn-generate').addEventListener('click', () => {
-            showConfirm('Generate List?',
-                `This will create/replace the due list for ${MONTH_NAMES[state.month]} ${state.year} from master data.`,
-                generateList);
+            const isRefresh = _hasMonthlyEntries();
+            const title = isRefresh ? '↻ Refresh Data?' : 'Generate List?';
+            const msg = isRefresh
+                ? `Update ${MONTH_NAMES[state.month]} ${state.year} with latest master data. Your notes & status will be preserved.`
+                : `Create the due list for ${MONTH_NAMES[state.month]} ${state.year} from master data.`;
+            showConfirm(title, msg, generateList);
         });
 
         // Tabs
@@ -486,5 +513,6 @@ const App = (() => {
         showConfirm,
         renderCurrentView,
         getEntries,
+        getFilterText,
     };
 })();

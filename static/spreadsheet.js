@@ -264,6 +264,25 @@ const Spreadsheet = (() => {
         document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
     }
 
+    /** Wrap matching substrings in <mark> for search highlighting */
+    function highlightText(span, text) {
+        const filter = (typeof App !== 'undefined' && App.getFilterText) ? App.getFilterText() : '';
+        if (!filter || !text) { span.textContent = text; return; }
+        const lower = text.toLowerCase();
+        const idx = lower.indexOf(filter);
+        if (idx === -1) { span.textContent = text; return; }
+        // Build: before + <mark> + after
+        span.textContent = '';
+        if (idx > 0) span.appendChild(document.createTextNode(text.slice(0, idx)));
+        const mark = document.createElement('mark');
+        mark.className = 'search-hl';
+        mark.textContent = text.slice(idx, idx + filter.length);
+        span.appendChild(mark);
+        if (idx + filter.length < text.length) {
+            span.appendChild(document.createTextNode(text.slice(idx + filter.length)));
+        }
+    }
+
     /* ════════════════════════════════════════════════════════════════════
        ROW BUILDERS — used by VirtualScroller
        ════════════════════════════════════════════════════════════════════ */
@@ -301,7 +320,7 @@ const Spreadsheet = (() => {
                 td.dataset.entryId = entryId;
                 const span = document.createElement('span');
                 span.className = 'cell-content';
-                span.textContent = entry.policyno || '';
+                highlightText(span, entry.policyno || '');
                 td.appendChild(span);
 
             } else {
@@ -312,10 +331,11 @@ const Spreadsheet = (() => {
                 const span = document.createElement('span');
                 span.className = 'cell-content';
                 if (col.type === 'status') {
-                    span.textContent = STATUS_LABELS[value] || value || 'Due';
+                    const displayVal = STATUS_LABELS[value] || value || 'Due';
+                    highlightText(span, displayVal);
                     addStatusClass(td, value);
                 } else {
-                    span.textContent = value;
+                    highlightText(span, value);
                 }
                 td.appendChild(span);
             }
@@ -421,42 +441,40 @@ const Spreadsheet = (() => {
         const isNote = col.key.startsWith('note');
         // Regex to detect date prefix: "DD/MM - " at the start
         const DATE_PREFIX_RE = /^(\d{2}\/\d{2})\s*-\s*/;
-        let datePrefix = '';  // e.g. "07/07 - "
+        let datePrefix = '';  // e.g. "08/07 - "
         let textPart = value; // the editable portion
 
         if (isNote && value) {
             const m = value.match(DATE_PREFIX_RE);
             if (m) {
-                datePrefix = m[1] + ' - ';  // normalize to "DD/MM - "
-                textPart = value.slice(m[0].length);
+                textPart = value.slice(m[0].length); // strip old date
             }
         }
 
-        // If note cell is empty and user starts typing, generate today's prefix
-        let autoPrefix = '';
-        if (isNote && !value && initialKey) {
+        // Always use today's date for notes (date = last modified)
+        if (isNote) {
             const now = new Date();
             const dd = String(now.getDate()).padStart(2, '0');
             const mm = String(now.getMonth() + 1).padStart(2, '0');
-            autoPrefix = `${dd}/${mm} - `;
+            datePrefix = `${dd}/${mm} - `;
         }
 
         // Build the cell: [locked date prefix] [input]
-        if (datePrefix || autoPrefix) {
+        if (datePrefix) {
             const prefixSpan = document.createElement('span');
             prefixSpan.className = 'note-date-prefix';
-            prefixSpan.textContent = datePrefix || autoPrefix;
+            prefixSpan.textContent = datePrefix;
             td.appendChild(prefixSpan);
         }
 
         const input = document.createElement('input');
         input.type = 'text'; input.className = 'cell-input';
-        if (datePrefix || autoPrefix) {
+        if (datePrefix) {
             input.classList.add('has-prefix');
         }
         input.value = initialKey || textPart;
 
-        const effectivePrefix = datePrefix || autoPrefix;
+        const effectivePrefix = datePrefix;
 
         input.addEventListener('blur', () => {
             let nv = input.value.trim();

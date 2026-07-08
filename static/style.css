@@ -109,7 +109,6 @@ body { display: flex; flex-direction: column; }
 .month-hit { position: absolute; top: 0; bottom: 0; width: 50%; cursor: pointer; z-index: 2; }
 .month-hit-left { left: 0; }
 .month-hit-right { right: 0; }
-.month-hit:hover ~ .month-nav { }
 .month-hit-left:hover { background: rgba(0,0,0,0.08); border-radius: 8px 0 0 8px; }
 .month-hit-right:hover { background: rgba(0,0,0,0.08); border-radius: 0 8px 8px 0; }
 .header-right > .month-badge { background: var(--green); border-radius: 8px; }
@@ -290,7 +289,7 @@ body { display: flex; flex-direction: column; }
 .spreadsheet[data-month="12"] th { background: #e3f2fd; } /* Dec — soft periwinkle */
 
 /* ══ Search highlight ════════════════════════════════════════════════ */
-mark.search-hl { background: #fef08a; color: inherit; padding: 0 1px; border-radius: 2px; }
+mark.search-hl { background: #e0c8f0; color: inherit; padding: 0 1px; border-radius: 2px; }
 .search-hidden { display: none !important; }
 
 /* ══ Spreadsheet ════════════════════════════════════════════════════ */

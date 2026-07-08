@@ -602,12 +602,25 @@ def generate_list(year: int = Query(None), month: int = Query(None)):
 
 
 def generate_list_internal(target_year: int, target_month: int):
-    """Core generation logic — called by API and auto-gen background task."""
+    """Core generation logic — called by API and auto-gen background task.
+    
+    If the monthly list already exists (REFRESH mode):
+      - UPSERT: update master-synced fields, preserve notes/status
+      - Add new due policies
+      - Remove entries whose policyno was deleted from master
+    If no list exists (GENERATE mode):
+      - Full insert from scratch
+    """
     with get_db() as conn:
         all_policies = conn.execute("SELECT * FROM master_policies").fetchall()
         source_total = len(all_policies)
 
-        # Filter + deduplicate
+        # Build set of all master policynos (for orphan detection)
+        master_policynos = set()
+        for p in all_policies:
+            master_policynos.add(p["policyno"])
+
+        # Filter + deduplicate for this month
         seen, due_entries = set(), []
         for p in all_policies:
             pno = p["policyno"]
@@ -623,43 +636,90 @@ def generate_list_internal(target_year: int, target_month: int):
         # Sort by FUP day
         due_entries.sort(key=lambda e: e.get("fup_day", 0))
 
-        # Create or replace list
         existing = conn.execute(
             "SELECT id FROM monthly_lists WHERE year=? AND month=?",
             (target_year, target_month)
         ).fetchone()
 
-        if existing:
+        is_refresh = existing is not None
+        removed_count = 0
+
+        if is_refresh:
+            # ── REFRESH MODE: UPSERT — preserve notes, status ──
             list_id = existing["id"]
-            conn.execute("DELETE FROM monthly_entries WHERE list_id=?", (list_id,))
+
+            # 1) Remove entries whose policyno was deleted from master
+            orphans = conn.execute(
+                "SELECT id, policyno FROM monthly_entries WHERE list_id=?", (list_id,)
+            ).fetchall()
+            for o in orphans:
+                if o["policyno"] not in master_policynos:
+                    conn.execute("DELETE FROM monthly_entries WHERE id=?", (o["id"],))
+                    removed_count += 1
+
+            # 2) UPSERT: update master-synced fields, preserve notes/status/fup_day edits
+            for e in due_entries:
+                existing_entry = conn.execute(
+                    "SELECT id FROM monthly_entries WHERE list_id=? AND policyno=?",
+                    (list_id, e["policyno"])
+                ).fetchone()
+
+                if existing_entry:
+                    # Update only master-synced fields (NOT status, notes)
+                    conn.execute(
+                        """UPDATE monthly_entries 
+                           SET name=?, doc=?, fup=?, sumass=?, plan=?, mode=?,
+                               premium=?, mobileno=?, fup_day=?, updated_at=?
+                           WHERE id=?""",
+                        (e.get("name",""), e.get("doc",""), e.get("fup",""),
+                         e.get("sumass",""), e.get("plan",""), e.get("mode",""),
+                         e.get("premium",""), e.get("mobileno",""),
+                         e.get("fup_day",0), datetime.now().isoformat(),
+                         existing_entry["id"])
+                    )
+                else:
+                    # New policy — full insert
+                    conn.execute(
+                        """INSERT INTO monthly_entries
+                           (list_id,policyno,name,doc,fup,sumass,plan,mode,premium,mobileno,status,fup_day,updated_at)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (list_id, e["policyno"], e.get("name",""), e.get("doc",""),
+                         e.get("fup",""), e.get("sumass",""), e.get("plan",""),
+                         e.get("mode",""), e.get("premium",""), e.get("mobileno",""),
+                         e.get("status",""), e.get("fup_day",0), datetime.now().isoformat())
+                    )
+
             conn.execute(
                 "UPDATE monthly_lists SET generated_at=?, source_total=?, filtered_count=? WHERE id=?",
                 (datetime.now().isoformat(), source_total, len(due_entries), list_id)
             )
         else:
+            # ── GENERATE MODE: fresh insert ──
             conn.execute(
                 "INSERT INTO monthly_lists (year,month,generated_at,source_total,filtered_count) VALUES (?,?,?,?,?)",
                 (target_year, target_month, datetime.now().isoformat(), source_total, len(due_entries))
             )
             list_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
 
-        # Insert entries
-        for e in due_entries:
-            conn.execute(
-                """INSERT OR REPLACE INTO monthly_entries
-                   (list_id,policyno,name,doc,fup,sumass,plan,mode,premium,mobileno,status,fup_day,updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (list_id, e["policyno"], e.get("name",""), e.get("doc",""),
-                 e.get("fup",""), e.get("sumass",""), e.get("plan",""),
-                 e.get("mode",""), e.get("premium",""), e.get("mobileno",""),
-                 e.get("status",""), e.get("fup_day",0), datetime.now().isoformat())
-            )
+            for e in due_entries:
+                conn.execute(
+                    """INSERT INTO monthly_entries
+                       (list_id,policyno,name,doc,fup,sumass,plan,mode,premium,mobileno,status,fup_day,updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (list_id, e["policyno"], e.get("name",""), e.get("doc",""),
+                     e.get("fup",""), e.get("sumass",""), e.get("plan",""),
+                     e.get("mode",""), e.get("premium",""), e.get("mobileno",""),
+                     e.get("status",""), e.get("fup_day",0), datetime.now().isoformat())
+                )
 
     db_push()
+    action = "Refreshed" if is_refresh else "Generated"
     return {
-        "message": f"Generated list for {target_month}/{target_year}",
+        "message": f"{action} list for {target_month}/{target_year}",
         "source_total": source_total,
         "filtered_count": len(due_entries),
+        "is_refresh": is_refresh,
+        "removed": removed_count,
     }
 
 
