@@ -115,10 +115,19 @@ const Spreadsheet = (() => {
         ta.remove();
     }
 
+    let _copyHighlightTimer = null;
+    let _copiedRow = null;
+
+    function clearCopyHighlight() {
+        if (_copyHighlightTimer) { clearTimeout(_copyHighlightTimer); _copyHighlightTimer = null; }
+        if (_copiedRow) { _copiedRow.classList.remove('copied-row'); _copiedRow = null; }
+    }
+
     function showCopyFeedback(tr, pno) {
-        document.querySelectorAll('tr.copied-row').forEach(r => r.classList.remove('copied-row'));
+        clearCopyHighlight();
         tr.classList.add('copied-row');
-        setTimeout(() => tr.classList.remove('copied-row'), 3000);
+        _copiedRow = tr;
+        _copyHighlightTimer = setTimeout(clearCopyHighlight, 120000); // 2 minutes
         App.toast(`Copied: ${pno}`, 'success', 1500);
     }
 
@@ -805,6 +814,7 @@ const Spreadsheet = (() => {
 
         // Click → select cell
         tbody.addEventListener('click', (e) => {
+            clearCopyHighlight();
             const td = e.target.closest('td.editable, td.policyno-selectable');
             if (td) {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
