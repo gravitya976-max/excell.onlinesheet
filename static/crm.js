@@ -79,6 +79,51 @@ const CRM = (() => {
         });
     }
 
+    // ── Auto-scroll during drag ──────────────────────────────────────
+    const EDGE_ZONE = 60;       // px from edge to trigger scroll
+    const MAX_SCROLL_SPEED = 12; // px per frame at the very edge
+    let _autoScrollRAF = null;
+    let _autoScrollDir = 0;     // -1 = up, +1 = down, 0 = stop
+    let _autoScrollSpeed = 0;
+    let _lastDragClientY = 0;
+
+    function _getScrollContainer() {
+        return document.getElementById('scroll-container');
+    }
+
+    function _autoScrollLoop() {
+        _autoScrollRAF = null;
+        if (_autoScrollDir === 0 || !_dragging) return;
+        const sc = _getScrollContainer();
+        if (!sc) return;
+        sc.scrollTop += _autoScrollDir * _autoScrollSpeed;
+
+        // Process the row under the pointer after scrolling
+        const tr = document.elementFromPoint(
+            window.innerWidth / 2, _lastDragClientY
+        )?.closest('tbody tr[data-entry-id]');
+        if (tr) _dragProcessRow(tr);
+
+        _autoScrollRAF = requestAnimationFrame(_autoScrollLoop);
+    }
+
+    function _startAutoScroll(dir, speed) {
+        _autoScrollDir = dir;
+        _autoScrollSpeed = speed;
+        if (!_autoScrollRAF) {
+            _autoScrollRAF = requestAnimationFrame(_autoScrollLoop);
+        }
+    }
+
+    function _stopAutoScroll() {
+        _autoScrollDir = 0;
+        _autoScrollSpeed = 0;
+        if (_autoScrollRAF) {
+            cancelAnimationFrame(_autoScrollRAF);
+            _autoScrollRAF = null;
+        }
+    }
+
     function onDragStart(e) {
         if (mode !== 'sms' || isSending) return;
         if (App.state.activeTab !== 'list') return;
@@ -112,6 +157,25 @@ const CRM = (() => {
 
     function onDragMove(e) {
         if (!_dragging) return;
+        _lastDragClientY = e.clientY;
+
+        // Auto-scroll when pointer is near top/bottom edge
+        const sc = _getScrollContainer();
+        if (sc) {
+            const rect = sc.getBoundingClientRect();
+            const fromTop = e.clientY - rect.top;
+            const fromBottom = rect.bottom - e.clientY;
+
+            if (fromTop < EDGE_ZONE && fromTop >= 0) {
+                const speed = Math.ceil(MAX_SCROLL_SPEED * (1 - fromTop / EDGE_ZONE));
+                _startAutoScroll(-1, speed);
+            } else if (fromBottom < EDGE_ZONE && fromBottom >= 0) {
+                const speed = Math.ceil(MAX_SCROLL_SPEED * (1 - fromBottom / EDGE_ZONE));
+                _startAutoScroll(1, speed);
+            } else {
+                _stopAutoScroll();
+            }
+        }
 
         const tr = document.elementFromPoint(e.clientX, e.clientY)?.closest('tbody tr[data-entry-id]');
         if (!tr) return;
@@ -122,6 +186,7 @@ const CRM = (() => {
     function onDragEnd(e) {
         if (!_dragging) return;
         _dragging = false;
+        _stopAutoScroll();
         document.removeEventListener('selectstart', _preventSelect);
         document.body.style.userSelect = '';
         document.body.style.webkitUserSelect = '';
@@ -611,16 +676,22 @@ const CRM = (() => {
             tr.classList.add('crm-selected');
         }
 
-        renderFloatBox();
+        _scheduleRender();
     }
 
     // ── Floating box render ──────────────────────────────────────────
+    // Track which policy_nos are currently rendered in the float list
+    let _renderedPolicies = new Map(); // policy_no -> DOM element
+
     function renderFloatBox() {
         const box = $('#crm-float-box');
         if (!box) return;
 
         if (selectedContacts.length === 0 && !isSending) {
             box.classList.remove('visible');
+            _renderedPolicies.clear();
+            const list = $('#crm-float-list');
+            if (list) list.innerHTML = '';
             return;
         }
         box.classList.add('visible');
@@ -631,9 +702,21 @@ const CRM = (() => {
         const list = $('#crm-float-list');
         if (!list) return;
 
-        // Use DocumentFragment for batch DOM update — prevents reflow lag with 50+ items
-        const frag = document.createDocumentFragment();
-        selectedContacts.forEach((c, i) => {
+        // Build set of current policy_nos for fast lookup
+        const currentSet = new Set(selectedContacts.map(c => c.policy_no));
+
+        // Remove DOM nodes for deselected contacts
+        for (const [pno, el] of _renderedPolicies) {
+            if (!currentSet.has(pno)) {
+                el.remove();
+                _renderedPolicies.delete(pno);
+            }
+        }
+
+        // Add DOM nodes for newly selected contacts (only those not already rendered)
+        selectedContacts.forEach((c) => {
+            if (_renderedPolicies.has(c.policy_no)) return; // already in DOM
+
             const item = document.createElement('div');
             item.className = 'crm-float-item';
             const badgeClass = c.status === 'Auto Debit' ? 'crm-badge-autodebit' : 'crm-badge-due';
@@ -644,20 +727,23 @@ const CRM = (() => {
                         ${esc(c.policy_no)} · <span class="${badgeClass}">${esc(c.status)}</span>
                     </div>
                 </div>
-                <button class="crm-remove" data-idx="${i}" title="Remove">×</button>
+                <button class="crm-remove" title="Remove">×</button>
             `;
-            item.querySelector('.crm-remove').addEventListener('click', () => removeContact(i));
-            frag.appendChild(item);
+            const pno = c.policy_no;
+            item.querySelector('.crm-remove').addEventListener('click', () => {
+                const idx = selectedContacts.findIndex(sc => sc.policy_no === pno);
+                if (idx >= 0) removeContact(idx);
+            });
+            list.appendChild(item);
+            _renderedPolicies.set(c.policy_no, item);
         });
-        list.innerHTML = '';
-        list.appendChild(frag);
 
         // Auto-scroll to show latest selection
         list.scrollTop = list.scrollHeight;
 
-        // Restore footer with send button
+        // Create footer send button once, don't rebuild each time
         const footer = $('#crm-float-footer');
-        if (footer && !isSending) {
+        if (footer && !isSending && !$('#crm-send-btn')) {
             footer.innerHTML = '<button id="crm-send-btn" class="crm-send-btn">Send SMS</button>';
             $('#crm-send-btn')?.addEventListener('click', showConfirmation);
         }
@@ -673,6 +759,7 @@ const CRM = (() => {
     function clearAll() {
         selectedContacts.forEach(c => c.rowEl?.classList.remove('crm-selected'));
         selectedContacts = [];
+        _renderedPolicies.clear();
         isSending = false;
         batchId = null;
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }

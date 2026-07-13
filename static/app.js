@@ -452,10 +452,11 @@ const App = (() => {
             handleFiles(e.dataTransfer.files);
         });
 
-        // Search
+        // Search – capture value eagerly so fast typing doesn't lose it
         $('#search-input').addEventListener('input', (e) => {
+            const val = e.target.value;
             clearTimeout(_searchTimer);
-            _searchTimer = setTimeout(() => doSearch(e.target.value), 200);
+            _searchTimer = setTimeout(() => doSearch(val), 200);
         });
         $('#search-clear').addEventListener('click', clearSearch);
         $('#search-input').addEventListener('keydown', (e) => {
