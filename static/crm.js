@@ -39,6 +39,7 @@ const CRM = (() => {
     let _preDragPnos = new Set();     // policy_nos selected before drag
     let _lastRangeLo = -1;            // optimization: skip rebuild if range unchanged
     let _lastRangeHi = -1;
+    let _suppressNextClick = false;   // prevent click handler after drag-select
 
     function init() {
         // Mode buttons
@@ -287,6 +288,8 @@ const CRM = (() => {
         document.body.style.userSelect = '';
         document.body.style.webkitUserSelect = '';
         window.getSelection()?.removeAllRanges();
+        // Suppress the upcoming click event so onRowClick doesn't double-process
+        _suppressNextClick = true;
         // Final full render of float box now that drag is done
         renderFloatBox();
     }
@@ -693,10 +696,10 @@ const CRM = (() => {
         if (!tr) return;
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
 
-        // Skip if this row was already handled by drag-select
-        if (mode === 'sms' && _dragTouched.size > 0) {
-            const pno = _getPolicyFromRow(tr);
-            if (_dragTouched.has(pno)) return;
+        // Skip if drag-select just handled this click
+        if (_suppressNextClick) {
+            _suppressNextClick = false;
+            return;
         }
 
         // Always read from DOM (reflects edits + newly added rows)
