@@ -150,7 +150,7 @@ const App = (() => {
         $('#info-count').textContent = 'No list generated';
         $('#info-generated-at').textContent = '';
         $('#footer-count').textContent = '0 rows';
-        updateStatPills(0, 0, 0);
+        updateStatPills(0, 0, 0, 0);
         // Button shows "Generate" when no sheet
         const btn = $('#btn-generate');
         if (btn) btn.textContent = 'Generate';
@@ -163,11 +163,7 @@ const App = (() => {
         $('#info-generated-at').textContent = meta && meta.generated_at
             ? `Last refreshed: ${new Date(meta.generated_at).toLocaleString()}` : '';
         $('#footer-count').textContent = `${entries.length} rows`;
-        const dueCount = entries.filter(e => {
-            const s = (e.status || '').trim().toLowerCase();
-            return s === '' || s === 'due';
-        }).length;
-        updateStatPills(entries.length, dueCount, entries.length - dueCount);
+        computeAndUpdateStats(entries);
         // Button shows "↻ Refresh" when sheet exists
         const btn = $('#btn-generate');
         if (btn) btn.textContent = '↻ Refresh';
@@ -183,13 +179,34 @@ const App = (() => {
         $('#footer-count').textContent = `${total} rows`;
     }
 
-    function updateStatPills(total, due, paid) {
+    /** Compute stat counts from entries and update the pills */
+    function computeAndUpdateStats(entries) {
+        if (!entries) entries = getEntries();
+        let due = 0, paid = 0, nif = 0;
+        const PAID_STATUSES = new Set(['paid', 'autodebit', 'dailycollection', 'branchpaid']);
+        for (const e of entries) {
+            const s = (e.status || '').trim().toLowerCase();
+            if (s === 'notinforce') {
+                nif++;
+            } else if (PAID_STATUSES.has(s)) {
+                paid++;
+            } else {
+                // '' or 'due' or anything else → Due
+                due++;
+            }
+        }
+        updateStatPills(entries.length, due, paid, nif);
+    }
+
+    function updateStatPills(total, due, paid, nif) {
         const totalEl = $('#stat-total-val');
         const dueEl = $('#stat-due-val');
         const paidEl = $('#stat-paid-val');
+        const nifEl = $('#stat-nif-val');
         if (totalEl) totalEl.textContent = total;
         if (dueEl) dueEl.textContent = due;
         if (paidEl) paidEl.textContent = paid;
+        if (nifEl) nifEl.textContent = nif;
     }
 
     // ── Fetch individual month (fallback if not in bulk cache) ────────
@@ -499,6 +516,14 @@ const App = (() => {
 
         // Background: bulk load all data
         setTimeout(() => refreshBulkData(), hasCached ? 3000 : 500);
+
+        // Real-time stat pill updates + NIF re-sort when a status cell changes
+        if (Spreadsheet.onStatusChange) {
+            Spreadsheet.onStatusChange(() => {
+                computeAndUpdateStats();
+                Spreadsheet.resortEntries(); // Move NIF rows to bottom
+            });
+        }
     }
 
     document.addEventListener('DOMContentLoaded', init);

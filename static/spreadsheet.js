@@ -26,9 +26,11 @@ const Spreadsheet = (() => {
         COLUMNS.push({ key: `note${i}`, label: `Note ${i}`, editable: true, type: 'text' });
     }
 
-    const STATUS_OPTIONS = ['', 'paid', 'autodebit', 'dailycollection', 'branchpaid'];
-    const STATUS_LABELS  = { '': 'Due', 'paid': 'Paid', 'autodebit': 'Auto Debit', 'dailycollection': 'Daily Collection', 'branchpaid': 'Branch Paid' };
-    const STATUS_KEYS    = { 'p': 'paid', 'a': 'autodebit', 'd': '', 'c': 'dailycollection', 'b': 'branchpaid' };
+    const STATUS_OPTIONS = ['', 'paid', 'autodebit', 'dailycollection', 'branchpaid', 'notinforce'];
+    const STATUS_LABELS  = { '': 'Due', 'paid': 'Paid', 'autodebit': 'Auto Debit', 'dailycollection': 'Daily Collection', 'branchpaid': 'Branch Paid', 'notinforce': 'Not in Force' };
+    const STATUS_KEYS    = { 'p': 'paid', 'a': 'autodebit', 'd': '', 'c': 'dailycollection', 'b': 'branchpaid', 'n': 'notinforce' };
+
+    let _onStatusChangeCallback = null; // Callback for real-time stat updates
 
     let currentEditCell = null;
     let _currentEntries = [];  // Current filtered view data
@@ -303,6 +305,10 @@ const Spreadsheet = (() => {
         const entryId = entry._monthlyId || entry.id;
         tr.dataset.entryId = entryId;
         if (rowHeights[idx]) tr.style.height = rowHeights[idx] + 'px';
+        // Dim "Not in Force" rows
+        if ((entry.status || '').toLowerCase() === 'notinforce') {
+            tr.classList.add('nif-row');
+        }
 
         const activeCols = getActiveCols();
         activeCols.forEach(col => {
@@ -409,6 +415,13 @@ const Spreadsheet = (() => {
 
         _currentEntries = entries || [];
 
+        // Split NIF entries out — they render after extra rows (list view only)
+        let nifEntries = [];
+        if (typeof App !== 'undefined' && App.state.activeTab === 'list') {
+            nifEntries = _currentEntries.filter(e => (e.status || '').toLowerCase() === 'notinforce');
+            _currentEntries = _currentEntries.filter(e => (e.status || '').toLowerCase() !== 'notinforce');
+        }
+
         const tbody = document.getElementById('spreadsheet-body');
         const scrollContainer = document.getElementById('scroll-container');
 
@@ -422,13 +435,24 @@ const Spreadsheet = (() => {
             _vsInitialized = true;
         }
 
-        // Feed data to virtual scroller
+        // Feed data to virtual scroller (NIF goes after extra rows)
         VirtualScroller.setData(_currentEntries);
+        VirtualScroller.setNifData(nifEntries);
+    }
+
+    /** Lightweight re-split: moves NIF entries to bottom section */
+    function resortEntries() {
+        if (typeof App !== 'undefined' && App.state.activeTab !== 'list') return;
+        const entries = App.getEntries();
+        const nifEntries = entries.filter(e => (e.status || '').toLowerCase() === 'notinforce');
+        _currentEntries = entries.filter(e => (e.status || '').toLowerCase() !== 'notinforce');
+        VirtualScroller.setData(_currentEntries);
+        VirtualScroller.setNifData(nifEntries);
     }
 
     /* ── Status class helper ─────────────────────────────────────────── */
     function addStatusClass(td, value) {
-        td.classList.remove('status-due', 'status-paid', 'status-autodebit', 'status-dailycollection', 'status-branchpaid');
+        td.classList.remove('status-due', 'status-paid', 'status-autodebit', 'status-dailycollection', 'status-branchpaid', 'status-notinforce');
         if (!value || value === '' || value === 'due') {
             td.classList.add('status-due');
         } else if (STATUS_OPTIONS.includes(value)) {
@@ -709,7 +733,13 @@ const Spreadsheet = (() => {
         const entryId = td.dataset.entryId;
         if (!field || !entryId) return null;
         const col = COLUMNS.find(c => c.key === field);
-        const entry = _currentEntries.find(e => (e._monthlyId || e.id) === parseInt(entryId));
+        const id = parseInt(entryId);
+        // Search normal entries first, then all entries (for NIF rows)
+        let entry = _currentEntries.find(e => (e._monthlyId || e.id) === id);
+        if (!entry && typeof App !== 'undefined') {
+            const all = App.getEntries();
+            entry = all.find(e => (e._monthlyId || e.id) === id);
+        }
         if (!col || !entry) return null;
         return { col, entry };
     }
@@ -732,6 +762,25 @@ const Spreadsheet = (() => {
         td.classList.add('nav-selected');
         td.setAttribute('tabindex', '0');
         td.focus();
+
+        // Notify App for real-time stat pill updates
+        if (newVal !== oldVal && _onStatusChangeCallback) {
+            const isNifTransition = newVal === 'notinforce' || oldVal === 'notinforce';
+            if (isNifTransition) {
+                // Animate row out, then re-split data
+                const tr = td.closest('tr');
+                if (tr) {
+                    tr.classList.add('nif-departing');
+                    setTimeout(() => {
+                        _onStatusChangeCallback();
+                    }, 350); // matches CSS animation duration
+                } else {
+                    _onStatusChangeCallback();
+                }
+            } else {
+                _onStatusChangeCallback();
+            }
+        }
     }
 
     /* ── Keyboard handler ──────────────────────────────────────────────── */
@@ -928,6 +977,7 @@ const Spreadsheet = (() => {
     /* ── Public API ────────────────────────────────────────────────── */
     return {
         render,
+        resortEntries,
         COLUMNS,
         // Cell operations (for undo etc.)
         _saveCell: saveCell,
@@ -947,5 +997,7 @@ const Spreadsheet = (() => {
         // Hover tracking
         getHoveredRow: () => _hoveredRow,
         copyPolicyNo,
+        // Status change callback for real-time stat updates
+        onStatusChange: (fn) => { _onStatusChangeCallback = fn; },
     };
 })();

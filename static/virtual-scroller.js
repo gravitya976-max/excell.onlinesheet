@@ -23,6 +23,7 @@ const VirtualScroller = (() => {
     let _container = null;
     let _tbody = null;
     let _data = [];
+    let _nifData = [];          // "Not in Force" entries (rendered after extra rows)
     let _renderRowFn = null;
     let _renderExtraFn = null;
     let _renderedRange = { start: -1, end: -1 };
@@ -57,11 +58,24 @@ const VirtualScroller = (() => {
 
     function getDataLength() { return _data.length; }
     function getRow(index) { return _data[index] || null; }
+    function getNifRow(index) { return _nifData[index] || null; }
+
+    function setNifData(nifArr) {
+        _nifData = nifArr || [];
+        _renderedRange = { start: -1, end: -1 };
+        _updateSpacerHeight();
+        _fullRender();
+    }
+
+    /** Total virtual row count across all sections */
+    function _totalRows() {
+        return _data.length + EXTRA_ROWS + _nifData.length;
+    }
 
     // ── Spacer height ────────────────────────────────────────────────
     function _updateSpacerHeight() {
         if (_tbody) {
-            _tbody.style.minHeight = ((_data.length + EXTRA_ROWS) * ROW_HEIGHT) + 'px';
+            _tbody.style.minHeight = (_totalRows() * ROW_HEIGHT) + 'px';
             _tbody.style.position = 'relative';
         }
     }
@@ -83,12 +97,24 @@ const VirtualScroller = (() => {
     // ── Build a single row (<tr>) by global index ────────────────────
     function _buildRow(i) {
         const totalDataRows = _data.length;
+        const extraEnd = totalDataRows + EXTRA_ROWS;
         let tr;
+
         if (i < totalDataRows) {
+            // Normal data row
             tr = _renderRowFn(_data[i], i);
-        } else {
+        } else if (i < extraEnd) {
+            // Extra (blank entry) row
             const extraIdx = i - totalDataRows;
             tr = _renderExtraFn(extraIdx, totalDataRows + extraIdx + 1);
+        } else {
+            // NIF row (after extra rows)
+            const nifIdx = i - extraEnd;
+            if (nifIdx < _nifData.length) {
+                tr = _renderRowFn(_nifData[nifIdx], totalDataRows + nifIdx);
+            } else {
+                tr = document.createElement('tr');
+            }
         }
         tr.style.height = ROW_HEIGHT + 'px';
         tr.style.contain = 'layout style';
@@ -119,7 +145,7 @@ const VirtualScroller = (() => {
         }
 
         // Bottom spacer
-        const totalRows = _data.length + EXTRA_ROWS;
+        const totalRows = _totalRows();
         frag.appendChild(_makeSpacerRow('vs-pad-bottom', (totalRows - end) * ROW_HEIGHT));
 
         _tbody.textContent = '';  // Faster than innerHTML = ''
@@ -168,7 +194,7 @@ const VirtualScroller = (() => {
                 _tbody.insertBefore(_buildRow(i), bottomSpacer);
             }
             // Update bottom spacer
-            const totalRows = _data.length + EXTRA_ROWS;
+            const totalRows = _totalRows();
             bottomSpacer.style.height = ((totalRows - end) * ROW_HEIGHT) + 'px';
         }
 
@@ -193,7 +219,7 @@ const VirtualScroller = (() => {
                 }
             }
             // Update bottom spacer
-            const totalRows = _data.length + EXTRA_ROWS;
+            const totalRows = _totalRows();
             bottomSpacer.style.height = ((totalRows - end) * ROW_HEIGHT) + 'px';
         }
 
@@ -204,7 +230,7 @@ const VirtualScroller = (() => {
 
     function _calcRange() {
         const scrollTop = _container.scrollTop;
-        const totalRows = _data.length + EXTRA_ROWS;
+        const totalRows = _totalRows();
         let start = Math.floor(scrollTop / ROW_HEIGHT) - BUFFER;
         let end = start + _visibleCount + BUFFER * 2;
         start = Math.max(0, start);
@@ -239,7 +265,7 @@ const VirtualScroller = (() => {
         const start = Math.floor(scrollTop / ROW_HEIGHT);
         return {
             start,
-            end: Math.min(start + _visibleCount, _data.length + EXTRA_ROWS)
+            end: Math.min(start + _visibleCount, _totalRows())
         };
     }
 
@@ -267,9 +293,9 @@ const VirtualScroller = (() => {
     function onRowRendered(fn) { _rowHooks.push(fn); }
 
     return {
-        init, setData, refresh, scrollToRow,
+        init, setData, setNifData, refresh, scrollToRow,
         getVisibleRange, updateRow, getDataLength,
-        getRow, getRowHeight, getExtraRowCount, destroy,
+        getRow, getNifRow, getRowHeight, getExtraRowCount, destroy,
         onRowRendered,
     };
 })();
