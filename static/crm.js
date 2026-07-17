@@ -77,14 +77,16 @@ const CRM = (() => {
         document.addEventListener('mousemove', onDragMove);
         document.addEventListener('mouseup', onDragEnd);
 
-        // ── Hook into virtual scroller: apply crm-selected to freshly rendered rows ──
+        // ── Hook into virtual scroller: sync crm-selected on freshly rendered rows ──
         if (typeof VirtualScroller !== 'undefined' && VirtualScroller.onRowRendered) {
             VirtualScroller.onRowRendered((tr) => {
-                if (mode !== 'sms') return;
-                const pno = _getPolicyFromRow(tr);
-                if (pno && selectedContacts.some(c => c.policy_no === pno)) {
-                    tr.classList.add('crm-selected');
+                if (mode !== 'sms') {
+                    tr.classList.remove('crm-selected');
+                    return;
                 }
+                const pno = _getPolicyFromRow(tr);
+                const isSelected = pno && selectedContacts.some(c => c.policy_no === pno);
+                tr.classList.toggle('crm-selected', isSelected);
             });
         }
 
@@ -126,11 +128,14 @@ const CRM = (() => {
     /**
      * Compute the data index from mouse Y position + scroll offset.
      * Uses VirtualScroller.getRowHeight() (32px) for math — no DOM lookup.
+     * Subtracts tbody.offsetTop to account for the <thead> height.
      * Clamps to [0, dataLength-1].
      */
     function _dataIdxFromMouseY(mouseY) {
         const sc = _getScrollContainer();
         if (!sc) return -1;
+        const tbody = document.getElementById('spreadsheet-body');
+        if (!tbody) return -1;
         const rect = sc.getBoundingClientRect();
         const ROW_HEIGHT = (typeof VirtualScroller !== 'undefined')
             ? VirtualScroller.getRowHeight() : 32;
@@ -138,8 +143,8 @@ const CRM = (() => {
             ? VirtualScroller.getDataLength() : 0;
         if (dataLen === 0) return -1;
 
-        // mouseY relative to container top + current scroll offset = absolute position in content
-        const absY = sc.scrollTop + (mouseY - rect.top);
+        // absY in the scrollable content, minus tbody offset (thead height)
+        const absY = sc.scrollTop + (mouseY - rect.top) - tbody.offsetTop;
         const idx = Math.floor(absY / ROW_HEIGHT);
         return Math.max(0, Math.min(dataLen - 1, idx));
     }
@@ -247,12 +252,12 @@ const CRM = (() => {
         document.body.style.webkitUserSelect = 'none';
         document.addEventListener('selectstart', _preventSelect);
 
-        // Compute initial scroll speed and selection
+        // Compute initial selection (just the anchor row)
         _scrollSpeed = _computeScrollSpeed(e.clientY);
         _rebuildSelectionFromData();
 
-        // Start the rAF tick loop
-        _dragRAF = requestAnimationFrame(_dragTick);
+        // NOTE: rAF loop starts on first mousemove, not here.
+        // A simple click (no movement) only selects the anchor row.
     }
 
     function _preventSelect(e) { e.preventDefault(); }
@@ -266,7 +271,12 @@ const CRM = (() => {
         // Recompute current index immediately on mouse move
         _currentDataIdx = _dataIdxFromMouseY(e.clientY);
 
-        // Rebuild selection (rAF tick also does this, but immediate move feels snappier)
+        // Start rAF loop on first move (not on mousedown — avoids double-select)
+        if (!_dragRAF) {
+            _dragRAF = requestAnimationFrame(_dragTick);
+        }
+
+        // Rebuild selection
         _rebuildSelectionFromData();
     }
 
@@ -873,13 +883,10 @@ const CRM = (() => {
     }
 
     function clearAll() {
-        // Remove CSS from all visible selected rows
-        const pnos = new Set(selectedContacts.map(c => c.policy_no));
-        const visibleRows = _getVisibleRows();
-        for (const row of visibleRows) {
-            if (pnos.has(_getPolicyFromRow(row))) {
-                row.classList.remove('crm-selected');
-            }
+        // Remove crm-selected from ALL rows in the tbody (not just visible)
+        const tbody = document.getElementById('spreadsheet-body');
+        if (tbody) {
+            tbody.querySelectorAll('tr.crm-selected').forEach(r => r.classList.remove('crm-selected'));
         }
         selectedContacts = [];
         _renderedPolicies.clear();
