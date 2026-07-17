@@ -452,11 +452,11 @@ const App = (() => {
             handleFiles(e.dataTransfer.files);
         });
 
-        // Search – capture value eagerly so fast typing doesn't lose it
-        $('#search-input').addEventListener('input', (e) => {
-            const val = e.target.value;
+        // Search – always read live input value when debounce fires
+        const searchInput = $('#search-input');
+        searchInput.addEventListener('input', () => {
             clearTimeout(_searchTimer);
-            _searchTimer = setTimeout(() => doSearch(val), 200);
+            _searchTimer = setTimeout(() => doSearch(searchInput.value), 120);
         });
         $('#search-clear').addEventListener('click', clearSearch);
         $('#search-input').addEventListener('keydown', (e) => {

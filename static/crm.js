@@ -28,8 +28,17 @@ const CRM = (() => {
     // ── Init ──────────────────────────────────────────────────────────
     // ── Drag-select state ─────────────────────────────────────────────
     let _dragging = false;
-    let _dragAction = null;  // 'select' or 'deselect'
-    let _dragTouched = new Set(); // policy_nos already toggled in this drag
+    let _dragAction = null;           // 'select' or 'deselect'
+    let _anchorDataIdx = -1;          // data index (vsIdx) of anchor row
+    let _currentDataIdx = -1;         // data index of current row under pointer
+    let _lastMouseX = 0;
+    let _lastMouseY = 0;
+    let _scrollSpeed = 0;             // px/frame: negative = up, positive = down
+    let _dragRAF = null;              // single rAF loop for scroll + selection
+    let _preDragContacts = [];        // snapshot of selectedContacts before drag
+    let _preDragPnos = new Set();     // policy_nos selected before drag
+    let _lastRangeLo = -1;            // optimization: skip rebuild if range unchanged
+    let _lastRangeHi = -1;
 
     function init() {
         // Mode buttons
@@ -39,6 +48,9 @@ const CRM = (() => {
 
         // Floating box controls
         $('#crm-clear-all')?.addEventListener('click', closeAndDeselect);
+
+        // Send SMS button (exists in HTML, attach listener now)
+        $('#crm-send-btn')?.addEventListener('click', showConfirmation);
 
         // Tab buttons
         $('#crm-tab-select')?.addEventListener('click', () => switchTab('select'));
@@ -64,6 +76,17 @@ const CRM = (() => {
         document.addEventListener('mousemove', onDragMove);
         document.addEventListener('mouseup', onDragEnd);
 
+        // ── Hook into virtual scroller: apply crm-selected to freshly rendered rows ──
+        if (typeof VirtualScroller !== 'undefined' && VirtualScroller.onRowRendered) {
+            VirtualScroller.onRowRendered((tr) => {
+                if (mode !== 'sms') return;
+                const pno = _getPolicyFromRow(tr);
+                if (pno && selectedContacts.some(c => c.policy_no === pno)) {
+                    tr.classList.add('crm-selected');
+                }
+            });
+        }
+
         // Gateway status polling (60s — avoids log flooding)
         pollGateway();
         gatewayTimer = setInterval(pollGateway, 60000);
@@ -79,119 +102,18 @@ const CRM = (() => {
         });
     }
 
-    // ── Auto-scroll during drag ──────────────────────────────────────
-    const EDGE_ZONE = 60;       // px from edge to trigger scroll
-    const MAX_SCROLL_SPEED = 12; // px per frame at the very edge
-    let _autoScrollRAF = null;
-    let _autoScrollDir = 0;     // -1 = up, +1 = down, 0 = stop
-    let _autoScrollSpeed = 0;
-    let _lastDragClientY = 0;
+    // ── Constants ────────────────────────────────────────────────────
+    const EDGE_ZONE = 60;          // px from container edge to trigger scroll
+    const MAX_SCROLL_SPEED = 14;   // px per frame at the very edge
 
     function _getScrollContainer() {
         return document.getElementById('scroll-container');
     }
 
-    function _autoScrollLoop() {
-        _autoScrollRAF = null;
-        if (_autoScrollDir === 0 || !_dragging) return;
-        const sc = _getScrollContainer();
-        if (!sc) return;
-        sc.scrollTop += _autoScrollDir * _autoScrollSpeed;
-
-        // Process the row under the pointer after scrolling
-        const tr = document.elementFromPoint(
-            window.innerWidth / 2, _lastDragClientY
-        )?.closest('tbody tr[data-entry-id]');
-        if (tr) _dragProcessRow(tr);
-
-        _autoScrollRAF = requestAnimationFrame(_autoScrollLoop);
-    }
-
-    function _startAutoScroll(dir, speed) {
-        _autoScrollDir = dir;
-        _autoScrollSpeed = speed;
-        if (!_autoScrollRAF) {
-            _autoScrollRAF = requestAnimationFrame(_autoScrollLoop);
-        }
-    }
-
-    function _stopAutoScroll() {
-        _autoScrollDir = 0;
-        _autoScrollSpeed = 0;
-        if (_autoScrollRAF) {
-            cancelAnimationFrame(_autoScrollRAF);
-            _autoScrollRAF = null;
-        }
-    }
-
-    function onDragStart(e) {
-        if (mode !== 'sms' || isSending) return;
-        if (App.state.activeTab !== 'list') return;
-        if (e.button !== 0) return; // left-click only
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON') return;
-
-        const tr = e.target.closest('tbody tr[data-entry-id]');
-        if (!tr) return;
-
-        // Prevent native text selection / drag behavior
-        e.preventDefault();
-
-        _dragging = true;
-        _dragTouched.clear();
-
-        // Determine action: if row is already selected → deselect mode, else → select mode
-        const pno = _getPolicyFromRow(tr);
-        const alreadySelected = pno && selectedContacts.some(c => c.policy_no === pno);
-        _dragAction = alreadySelected ? 'deselect' : 'select';
-
-        // Block all text selection during drag
-        document.body.style.userSelect = 'none';
-        document.body.style.webkitUserSelect = 'none';
-        document.addEventListener('selectstart', _preventSelect);
-
-        // Process this first row
-        _dragProcessRow(tr);
-    }
-
-    function _preventSelect(e) { e.preventDefault(); }
-
-    function onDragMove(e) {
-        if (!_dragging) return;
-        _lastDragClientY = e.clientY;
-
-        // Auto-scroll when pointer is near top/bottom edge
-        const sc = _getScrollContainer();
-        if (sc) {
-            const rect = sc.getBoundingClientRect();
-            const fromTop = e.clientY - rect.top;
-            const fromBottom = rect.bottom - e.clientY;
-
-            if (fromTop < EDGE_ZONE && fromTop >= 0) {
-                const speed = Math.ceil(MAX_SCROLL_SPEED * (1 - fromTop / EDGE_ZONE));
-                _startAutoScroll(-1, speed);
-            } else if (fromBottom < EDGE_ZONE && fromBottom >= 0) {
-                const speed = Math.ceil(MAX_SCROLL_SPEED * (1 - fromBottom / EDGE_ZONE));
-                _startAutoScroll(1, speed);
-            } else {
-                _stopAutoScroll();
-            }
-        }
-
-        const tr = document.elementFromPoint(e.clientX, e.clientY)?.closest('tbody tr[data-entry-id]');
-        if (!tr) return;
-
-        _dragProcessRow(tr);
-    }
-
-    function onDragEnd(e) {
-        if (!_dragging) return;
-        _dragging = false;
-        _stopAutoScroll();
-        document.removeEventListener('selectstart', _preventSelect);
-        document.body.style.userSelect = '';
-        document.body.style.webkitUserSelect = '';
-        // Clear any lingering text selection
-        window.getSelection()?.removeAllRanges();
+    function _getVisibleRows() {
+        const tbody = document.getElementById('spreadsheet-body');
+        if (!tbody) return [];
+        return Array.from(tbody.querySelectorAll('tr[data-entry-id]'));
     }
 
     function _getPolicyFromRow(tr) {
@@ -200,46 +122,223 @@ const CRM = (() => {
         return span?.textContent?.trim() || '';
     }
 
-    function _dragProcessRow(tr) {
-        const pno = _getPolicyFromRow(tr);
-        if (!pno || _dragTouched.has(pno)) return;
-        _dragTouched.add(pno);
+    /**
+     * Compute the data index from mouse Y position + scroll offset.
+     * Uses VirtualScroller.getRowHeight() (32px) for math — no DOM lookup.
+     * Clamps to [0, dataLength-1].
+     */
+    function _dataIdxFromMouseY(mouseY) {
+        const sc = _getScrollContainer();
+        if (!sc) return -1;
+        const rect = sc.getBoundingClientRect();
+        const ROW_HEIGHT = (typeof VirtualScroller !== 'undefined')
+            ? VirtualScroller.getRowHeight() : 32;
+        const dataLen = (typeof VirtualScroller !== 'undefined')
+            ? VirtualScroller.getDataLength() : 0;
+        if (dataLen === 0) return -1;
 
-        if (_dragAction === 'select') {
-            // Only add if not already selected
-            if (selectedContacts.some(c => c.policy_no === pno)) return;
-            const entry = readEntryFromRow(tr);
-            if (!entry) return;
-            const mobile = entry.mobileno || '';
-            if (!mobile) return; // skip rows without mobile
+        // mouseY relative to container top + current scroll offset = absolute position in content
+        const absY = sc.scrollTop + (mouseY - rect.top);
+        const idx = Math.floor(absY / ROW_HEIGHT);
+        return Math.max(0, Math.min(dataLen - 1, idx));
+    }
 
-            const statusRaw = (entry.status || '').trim().toLowerCase();
-            const statusLabel = (statusRaw === 'autodebit' || statusRaw === 'auto debit')
-                ? 'Auto Debit' : 'Due';
+    /**
+     * Compute scroll speed from mouse position relative to container edges.
+     * Returns negative for scroll-up, positive for scroll-down, 0 for no scroll.
+     * Speed increases the further outside the edge zone the mouse is.
+     */
+    function _computeScrollSpeed(mouseY) {
+        const sc = _getScrollContainer();
+        if (!sc) return 0;
+        const rect = sc.getBoundingClientRect();
+        const fromTop = mouseY - rect.top;
+        const fromBottom = rect.bottom - mouseY;
 
-            selectedContacts.push({
-                policy_no: pno,
-                name: entry.name || '',
-                mobile: mobile,
-                premium: entry.premium || '',
-                fup: entry.fup || '',
-                doc: entry.doc || '',
-                status: statusLabel,
-                rowEl: tr,
-            });
-            tr.classList.add('crm-selected');
-        } else {
-            // Deselect
-            const idx = selectedContacts.findIndex(c => c.policy_no === pno);
-            if (idx < 0) return;
-            selectedContacts.splice(idx, 1);
-            tr.classList.remove('crm-selected');
+        if (fromTop < EDGE_ZONE) {
+            // Mouse near/above top edge — scroll up
+            const dist = EDGE_ZONE - Math.max(0, fromTop);
+            return -Math.ceil(MAX_SCROLL_SPEED * (dist / EDGE_ZONE));
+        } else if (fromBottom < EDGE_ZONE) {
+            // Mouse near/below bottom edge — scroll down
+            const dist = EDGE_ZONE - Math.max(0, fromBottom);
+            return Math.ceil(MAX_SCROLL_SPEED * (dist / EDGE_ZONE));
+        }
+        return 0;
+    }
+
+    /**
+     * Build a contact object from VirtualScroller data (no DOM needed).
+     */
+    function _contactFromData(dataIdx) {
+        if (typeof VirtualScroller === 'undefined') return null;
+        const entry = VirtualScroller.getRow(dataIdx);
+        if (!entry) return null;
+        const pno = entry.policyno || '';
+        if (!pno) return null;
+        const mobile = entry.mobileno || '';
+        if (!mobile) return null;
+        const statusRaw = (entry.status || '').trim().toLowerCase();
+        const statusLabel = (statusRaw === 'autodebit' || statusRaw === 'auto debit')
+            ? 'Auto Debit' : 'Due';
+        return {
+            policy_no: pno,
+            name: entry.name || '',
+            mobile,
+            premium: entry.premium || '',
+            fup: entry.fup || '',
+            doc: entry.doc || '',
+            status: statusLabel,
+            rowEl: null, // no DOM ref needed
+        };
+    }
+
+    /**
+     * Core rAF tick loop — runs every frame while dragging.
+     * Handles auto-scroll AND selection recompute in one loop.
+     */
+    function _dragTick() {
+        if (!_dragging) return;
+
+        const sc = _getScrollContainer();
+        if (sc && _scrollSpeed !== 0) {
+            sc.scrollTop += _scrollSpeed;
         }
 
-        // Schedule float box rebuild on next animation frame (batches during fast drag)
-        _scheduleRender();
+        // Recompute current data index from last mouse position + scroll
+        _currentDataIdx = _dataIdxFromMouseY(_lastMouseY);
 
-        // Make float box visible if first selection
+        // Rebuild selection from data
+        _rebuildSelectionFromData();
+
+        _dragRAF = requestAnimationFrame(_dragTick);
+    }
+
+    // ── Event handlers ──────────────────────────────────────────────
+
+    function onDragStart(e) {
+        if (mode !== 'sms' || isSending) return;
+        if (App.state.activeTab !== 'list') return;
+        if (e.button !== 0) return;
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON') return;
+
+        const tr = e.target.closest('tbody tr[data-entry-id]');
+        if (!tr) return;
+
+        e.preventDefault();
+
+        _dragging = true;
+        _anchorDataIdx = parseInt(tr.dataset.vsIdx) || 0;
+        _lastMouseX = e.clientX;
+        _lastMouseY = e.clientY;
+        _currentDataIdx = _anchorDataIdx;
+
+        // Snapshot current selection
+        _preDragContacts = selectedContacts.map(c => ({ ...c }));
+        _preDragPnos = new Set(selectedContacts.map(c => c.policy_no));
+
+        // Determine action: if anchor row was already selected → deselect mode
+        const pno = _getPolicyFromRow(tr);
+        _dragAction = _preDragPnos.has(pno) ? 'deselect' : 'select';
+
+        // Block text selection
+        document.body.style.userSelect = 'none';
+        document.body.style.webkitUserSelect = 'none';
+        document.addEventListener('selectstart', _preventSelect);
+
+        // Compute initial scroll speed and selection
+        _scrollSpeed = _computeScrollSpeed(e.clientY);
+        _rebuildSelectionFromData();
+
+        // Start the rAF tick loop
+        _dragRAF = requestAnimationFrame(_dragTick);
+    }
+
+    function _preventSelect(e) { e.preventDefault(); }
+
+    function onDragMove(e) {
+        if (!_dragging) return;
+        _lastMouseX = e.clientX;
+        _lastMouseY = e.clientY;
+        _scrollSpeed = _computeScrollSpeed(e.clientY);
+
+        // Recompute current index immediately on mouse move
+        _currentDataIdx = _dataIdxFromMouseY(e.clientY);
+
+        // Rebuild selection (rAF tick also does this, but immediate move feels snappier)
+        _rebuildSelectionFromData();
+    }
+
+    function onDragEnd() {
+        if (!_dragging) return;
+        _dragging = false;
+        _anchorDataIdx = -1;
+        _currentDataIdx = -1;
+        _scrollSpeed = 0;
+        _preDragContacts = [];
+        _preDragPnos.clear();
+        if (_dragRAF) {
+            cancelAnimationFrame(_dragRAF);
+            _dragRAF = null;
+        }
+        _lastRangeLo = -1;
+        _lastRangeHi = -1;
+        document.removeEventListener('selectstart', _preventSelect);
+        document.body.style.userSelect = '';
+        document.body.style.webkitUserSelect = '';
+        window.getSelection()?.removeAllRanges();
+        // Final full render of float box now that drag is done
+        renderFloatBox();
+    }
+
+    /**
+     * Core selection logic — recomputes selectedContacts from data indices.
+     * Selection = all rows between anchor and current data index.
+     * Reads from VirtualScroller.getRow(i), not from DOM.
+     */
+    function _rebuildSelectionFromData() {
+        if (_anchorDataIdx < 0 || _currentDataIdx < 0) return;
+
+        const lo = Math.min(_anchorDataIdx, _currentDataIdx);
+        const hi = Math.max(_anchorDataIdx, _currentDataIdx);
+
+        // Skip if range hasn't changed
+        if (lo === _lastRangeLo && hi === _lastRangeHi) return;
+        _lastRangeLo = lo;
+        _lastRangeHi = hi;
+
+        // 1. Reset to pre-drag snapshot
+        selectedContacts.length = 0;
+        for (const c of _preDragContacts) selectedContacts.push({ ...c });
+
+        // 2. Apply drag action to ALL rows in [lo..hi] (from data, not DOM)
+        for (let i = lo; i <= hi; i++) {
+            const contact = _contactFromData(i);
+            if (!contact) continue;
+            const pno = contact.policy_no;
+
+            if (_dragAction === 'select') {
+                if (!selectedContacts.some(c => c.policy_no === pno)) {
+                    selectedContacts.push(contact);
+                }
+            } else {
+                const idx = selectedContacts.findIndex(c => c.policy_no === pno);
+                if (idx >= 0) selectedContacts.splice(idx, 1);
+            }
+        }
+
+        // 3. Sync CSS on visible DOM rows
+        const selectedPnos = new Set(selectedContacts.map(c => c.policy_no));
+        const visibleRows = _getVisibleRows();
+        for (const row of visibleRows) {
+            const pno = _getPolicyFromRow(row);
+            row.classList.toggle('crm-selected', selectedPnos.has(pno));
+        }
+
+        // 4. During drag: only update count badge (cheap). Full list render on dragEnd.
+        const header = $('#crm-float-count');
+        if (header) header.textContent = `Selected (${selectedContacts.length})`;
+
         if (selectedContacts.length > 0) {
             const box = $('#crm-float-box');
             if (box && !box.classList.contains('visible')) {
@@ -741,23 +840,44 @@ const CRM = (() => {
         // Auto-scroll to show latest selection
         list.scrollTop = list.scrollHeight;
 
-        // Create footer send button once, don't rebuild each time
+        // Ensure footer send button exists and has listener
         const footer = $('#crm-float-footer');
-        if (footer && !isSending && !$('#crm-send-btn')) {
-            footer.innerHTML = '<button id="crm-send-btn" class="crm-send-btn">Send SMS</button>';
-            $('#crm-send-btn')?.addEventListener('click', showConfirmation);
+        if (footer && !isSending) {
+            let sendBtn = $('#crm-send-btn');
+            if (!sendBtn) {
+                footer.innerHTML = '<button id="crm-send-btn" class="crm-send-btn">Send SMS</button>';
+                sendBtn = $('#crm-send-btn');
+            }
+            // Always (re-)attach listener — innerHTML replacement strips old listeners
+            sendBtn.onclick = showConfirmation;
         }
     }
 
     function removeContact(idx) {
         const c = selectedContacts[idx];
-        if (c?.rowEl) c.rowEl.classList.remove('crm-selected');
         selectedContacts.splice(idx, 1);
+        // Remove CSS from visible row if present
+        if (c) {
+            const visibleRows = _getVisibleRows();
+            for (const row of visibleRows) {
+                if (_getPolicyFromRow(row) === c.policy_no) {
+                    row.classList.remove('crm-selected');
+                    break;
+                }
+            }
+        }
         renderFloatBox();
     }
 
     function clearAll() {
-        selectedContacts.forEach(c => c.rowEl?.classList.remove('crm-selected'));
+        // Remove CSS from all visible selected rows
+        const pnos = new Set(selectedContacts.map(c => c.policy_no));
+        const visibleRows = _getVisibleRows();
+        for (const row of visibleRows) {
+            if (pnos.has(_getPolicyFromRow(row))) {
+                row.classList.remove('crm-selected');
+            }
+        }
         selectedContacts = [];
         _renderedPolicies.clear();
         isSending = false;

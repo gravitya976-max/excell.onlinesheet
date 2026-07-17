@@ -27,6 +27,7 @@ const VirtualScroller = (() => {
     let _renderExtraFn = null;
     let _renderedRange = { start: -1, end: -1 };
     let _scrollRAF = null;
+    let _rowHooks = [];   // callbacks called after each row is built: fn(tr, dataIndex)
     let _visibleCount = 0;
 
     // ── Init ─────────────────────────────────────────────────────────
@@ -92,6 +93,8 @@ const VirtualScroller = (() => {
         tr.style.height = ROW_HEIGHT + 'px';
         tr.style.contain = 'layout style';
         tr.dataset.vsIdx = i;
+        // Post-render hooks (e.g. CRM selection state)
+        for (const hook of _rowHooks) hook(tr, i);
         return tr;
     }
 
@@ -260,9 +263,13 @@ const VirtualScroller = (() => {
         _container = _tbody = _data = null;
     }
 
+    /** Register a callback that fires after each row is rendered: fn(tr, dataIndex) */
+    function onRowRendered(fn) { _rowHooks.push(fn); }
+
     return {
         init, setData, refresh, scrollToRow,
         getVisibleRange, updateRow, getDataLength,
         getRow, getRowHeight, getExtraRowCount, destroy,
+        onRowRendered,
     };
 })();

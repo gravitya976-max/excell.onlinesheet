@@ -242,8 +242,8 @@
 
 /* ── SMS mode row highlight (soft pastel blue) ─────────────────────── */
 tr.crm-selected td {
-    background: rgba(59,130,246,0.10) !important;
-    border-bottom-color: rgba(59,130,246,0.25) !important;
+    background: rgba(59,130,246,0.25) !important;
+    border-bottom-color: rgba(59,130,246,0.35) !important;
 }
 tr.crm-selected td:first-child {
     box-shadow: inset 4px 0 0 #3b82f6;
@@ -269,7 +269,7 @@ tr.crm-selected td.policyno-selectable .cell-content {
     color: #2563eb;
 }
 tr.crm-selected:hover td {
-    background: rgba(59,130,246,0.15) !important;
+    background: rgba(59,130,246,0.32) !important;
 }
 
 /* ── Draggable ────────────────────────────────────────────────────── */
