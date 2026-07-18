@@ -67,6 +67,15 @@ const VirtualScroller = (() => {
         _fullRender();
     }
 
+    /** Atomic update: set both normal + NIF data with a single render pass */
+    function setAllData(normalData, nifData) {
+        _data = normalData || [];
+        _nifData = nifData || [];
+        _renderedRange = { start: -1, end: -1 };
+        _updateSpacerHeight();
+        _fullRender();
+    }
+
     /** Total virtual row count across all sections */
     function _totalRows() {
         return _data.length + EXTRA_ROWS + _nifData.length;
@@ -293,7 +302,7 @@ const VirtualScroller = (() => {
     function onRowRendered(fn) { _rowHooks.push(fn); }
 
     return {
-        init, setData, setNifData, refresh, scrollToRow,
+        init, setData, setNifData, setAllData, refresh, scrollToRow,
         getVisibleRange, updateRow, getDataLength,
         getRow, getNifRow, getRowHeight, getExtraRowCount, destroy,
         onRowRendered,

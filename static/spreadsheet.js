@@ -435,9 +435,8 @@ const Spreadsheet = (() => {
             _vsInitialized = true;
         }
 
-        // Feed data to virtual scroller (NIF goes after extra rows)
-        VirtualScroller.setData(_currentEntries);
-        VirtualScroller.setNifData(nifEntries);
+        // Feed data to virtual scroller atomically (NIF goes after extra rows)
+        VirtualScroller.setAllData(_currentEntries, nifEntries);
     }
 
     /** Lightweight re-split: moves NIF entries to bottom section */
@@ -446,8 +445,7 @@ const Spreadsheet = (() => {
         const entries = App.getEntries();
         const nifEntries = entries.filter(e => (e.status || '').toLowerCase() === 'notinforce');
         _currentEntries = entries.filter(e => (e.status || '').toLowerCase() !== 'notinforce');
-        VirtualScroller.setData(_currentEntries);
-        VirtualScroller.setNifData(nifEntries);
+        VirtualScroller.setAllData(_currentEntries, nifEntries);
     }
 
     /* ── Status class helper ─────────────────────────────────────────── */
