@@ -2,15 +2,18 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#15803d">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>Online Sheet — Monthly Due List</title>
     <link rel="icon" type="image/png" href="/static/favicon.png">
     <meta name="description" content="Monthly insurance policy due list manager with editable spreadsheet view">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=72">
-    <link rel="stylesheet" href="/static/crm.css?v=72">
+    <link rel="stylesheet" href="/static/style.css?v=74">
+    <link rel="stylesheet" href="/static/crm.css?v=74">
 </head>
 <body>
     <!-- Row 1: Main header -->
@@ -26,15 +29,15 @@
                 </svg>
                 <div>
                     <div class="brand-name">Online Sheet</div>
-                    <div class="brand-version">Version 2.5.1</div>
+                    <div class="brand-version">Version 3.1.7</div>
                 </div>
             </div>
-            <nav class="tabs">
+            <nav class="tabs desktop-only">
                 <button id="tab-list" class="tab tab-active" data-tab="list" type="button">Monthly List</button>
                 <button id="tab-master" class="tab tab-inactive" data-tab="master" type="button">Master Data</button>
             </nav>
         </div>
-        <div class="header-right">
+        <div class="header-right desktop-only">
             <div class="month-controls" id="month-controls">
                 <button id="btn-prev-month" class="month-nav" title="Previous month">‹</button>
                 <span id="current-month-label" class="month-badge">July 2026</span>
@@ -62,7 +65,43 @@
                 Upload data
             </button>
         </div>
+        <!-- Hamburger button (mobile only) -->
+        <button id="hamburger-btn" class="hamburger mobile-only" type="button" aria-label="Menu">
+            <span></span><span></span><span></span>
+        </button>
     </header>
+
+    <!-- Mobile dropdown menu -->
+    <div id="mobile-menu" class="mobile-menu">
+        <div class="mobile-menu-row">
+            <button class="mobile-menu-item tab tab-active" data-tab="list" type="button">Monthly List</button>
+            <button class="mobile-menu-item tab tab-inactive" data-tab="master" type="button">Master Data</button>
+        </div>
+        <div class="mobile-menu-row">
+            <div class="month-controls" id="mobile-month-controls">
+                <button class="month-nav mobile-prev-month" title="Previous month">‹</button>
+                <span id="mobile-month-label" class="month-badge">July 2026</span>
+                <button class="month-nav mobile-next-month" title="Next month">›</button>
+                <div class="month-hit month-hit-left mobile-prev-month" title="Previous month"></div>
+                <div class="month-hit month-hit-right mobile-next-month" title="Next month"></div>
+            </div>
+        </div>
+        <div class="mobile-menu-row">
+            <button id="mobile-btn-generate" class="mobile-menu-item action-btn" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                    <path d="M3 12a9 9 0 1 0 3-6.7" /><polyline points="3 4 3 9 8 9" />
+                </svg>
+                Generate list
+            </button>
+            <button id="mobile-btn-upload" class="mobile-menu-item action-btn" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                    <path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2" />
+                    <polyline points="12 12 12 21" /><polyline points="8 16 12 12 16 16" />
+                </svg>
+                Upload
+            </button>
+        </div>
+    </div>
 
     <!-- Row 2: Toolbar -->
     <div class="toolbar" id="toolbar">
@@ -169,7 +208,10 @@
     <!-- Footer -->
     <footer id="footer">
         <span id="footer-count">0 rows</span>
-        <span id="footer-sync" class="sync-indicator"></span>
+        <span id="footer-sync" class="sync-indicator">
+            <span class="sync-dot"></span>
+            <span id="sync-text">Synced</span>
+        </span>
     </footer>
 
     <!-- Upload Modal -->
@@ -218,11 +260,12 @@
     <!-- Toast Container -->
     <div id="toast-container"></div>
 
-    <script src="/static/datastore.js?v=72"></script>
-    <script src="/static/virtual-scroller.js?v=72"></script>
-    <script src="/static/app.js?v=72"></script>
-    <script src="/static/spreadsheet.js?v=72"></script>
-    <script src="/static/crm.js?v=72"></script>
+    <script src="/static/datastore.js?v=74"></script>
+    <script src="/static/virtual-scroller.js?v=74"></script>
+    <script src="/static/offline-queue.js?v=74"></script>
+    <script src="/static/app.js?v=74"></script>
+    <script src="/static/spreadsheet.js?v=74"></script>
+    <script src="/static/crm.js?v=74"></script>
 
     <!-- CRM: Floating Selection Box -->
     <div id="crm-float-box" class="crm-float-box">

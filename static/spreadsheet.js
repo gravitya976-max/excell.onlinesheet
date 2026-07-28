@@ -439,12 +439,16 @@ const Spreadsheet = (() => {
         VirtualScroller.setAllData(_currentEntries, nifEntries);
     }
 
-    /** Lightweight re-split: moves NIF entries to bottom section */
+    /** Lightweight re-split: moves NIF entries to bottom section.
+     *  Uses combined current + existing NIF data (already mutated in-place)
+     *  instead of re-fetching from DataStore (avoids async race). */
     function resortEntries() {
         if (typeof App !== 'undefined' && App.state.activeTab !== 'list') return;
-        const entries = App.getEntries();
-        const nifEntries = entries.filter(e => (e.status || '').toLowerCase() === 'notinforce');
-        _currentEntries = entries.filter(e => (e.status || '').toLowerCase() !== 'notinforce');
+        // Combine current normal entries + existing NIF entries into one pool
+        const existingNif = VirtualScroller.getNifData ? VirtualScroller.getNifData() : [];
+        const all = _currentEntries.concat(existingNif);
+        const nifEntries = all.filter(e => (e.status || '').toLowerCase() === 'notinforce');
+        _currentEntries = all.filter(e => (e.status || '').toLowerCase() !== 'notinforce');
         VirtualScroller.setAllData(_currentEntries, nifEntries);
     }
 
@@ -869,21 +873,96 @@ const Spreadsheet = (() => {
             }
         });
 
-        // Right-click → edit
+        // Right-click → edit (desktop)
         tbody.addEventListener('contextmenu', (e) => {
             const td = e.target.closest('td.editable');
             if (!td) return;
             e.preventDefault();
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
             if (td.classList.contains('editing')) return;
-            closeActiveEdit();
-            if (isExtraCell(td)) { startExtraEdit(td); return; }
-            const field = td.dataset.field;
-            const entryId = parseInt(td.dataset.entryId);
-            const col = COLUMNS.find(c => c.key === field);
-            const entry = _currentEntries.find(en => (en._monthlyId || en.id) === entryId);
-            if (col && entry) startEdit(td, col, entry);
+            _triggerEdit(td);
         });
+
+        // Double-click → edit on all devices (desktop + mobile fallback)
+        tbody.addEventListener('dblclick', (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+            const td = e.target.closest('td.editable');
+            if (td && !td.classList.contains('editing')) {
+                _triggerEdit(td);
+            }
+            // Double-tap on policy number → copy
+            const pTd = e.target.closest('td.policyno-selectable');
+            if (pTd) {
+                const tr = pTd.closest('tr');
+                if (tr) copyPolicyNo(tr);
+            }
+        });
+
+        // ── Mobile touch interactions ─────────────────────────────────
+        if (App.isMobile) {
+            let _touchTimer = null;
+            let _touchStartX = 0;
+            let _touchStartY = 0;
+            let _touchTd = null;
+            let _lastTapTime = 0;
+            let _lastTapTd = null;
+
+            tbody.addEventListener('touchstart', (e) => {
+                const td = e.target.closest('td.editable, td.policyno-selectable');
+                if (!td) return;
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+                const touch = e.touches[0];
+                _touchStartX = touch.clientX;
+                _touchStartY = touch.clientY;
+                _touchTd = td;
+
+                // Long-press timer (500ms) → edit
+                _touchTimer = setTimeout(() => {
+                    _touchTimer = null;
+                    if (_touchTd && _touchTd.classList.contains('editable') && !_touchTd.classList.contains('editing')) {
+                        if (navigator.vibrate) navigator.vibrate(50);
+                        _triggerEdit(_touchTd);
+                    }
+                }, 500);
+            }, { passive: true });
+
+            tbody.addEventListener('touchmove', (e) => {
+                // Cancel long-press if finger moved more than 10px
+                if (_touchTimer) {
+                    const touch = e.touches[0];
+                    const dx = Math.abs(touch.clientX - _touchStartX);
+                    const dy = Math.abs(touch.clientY - _touchStartY);
+                    if (dx > 10 || dy > 10) {
+                        clearTimeout(_touchTimer);
+                        _touchTimer = null;
+                    }
+                }
+            }, { passive: true });
+
+            tbody.addEventListener('touchend', (e) => {
+                if (_touchTimer) {
+                    clearTimeout(_touchTimer);
+                    _touchTimer = null;
+                }
+
+                // Double-tap detection (300ms window) → copy policy number
+                const now = Date.now();
+                const td = _touchTd;
+                if (td && td.classList.contains('policyno-selectable') && _lastTapTd === td && (now - _lastTapTime) < 300) {
+                    e.preventDefault();
+                    const tr = td.closest('tr');
+                    if (tr) copyPolicyNo(tr);
+                    _lastTapTime = 0;
+                    _lastTapTd = null;
+                } else {
+                    _lastTapTime = now;
+                    _lastTapTd = td;
+                }
+
+                _touchTd = null;
+            }, { passive: false });
+        }
 
         // Click SN → delete row
         tbody.addEventListener('click', (e) => {
@@ -938,14 +1017,125 @@ const Spreadsheet = (() => {
 
         // Click outside → deselect
         document.addEventListener('click', (e) => {
-            if (!e.target.closest('.spreadsheet')) deselectCell();
+            if (!e.target.closest('.spreadsheet') && !e.target.closest('.mobile-status-picker')) deselectCell();
         });
 
         // Close edit on click outside
         document.addEventListener('mousedown', (e) => {
             if (!currentEditCell) return;
             if (currentEditCell.contains(e.target)) return;
+            if (e.target.closest('.mobile-status-picker')) return;
             closeActiveEdit();
+        });
+    }
+
+    /** Shared edit trigger — called from contextmenu, dblclick, and long-press */
+    function _triggerEdit(td) {
+        closeActiveEdit();
+        if (isExtraCell(td)) { startExtraEdit(td); return; }
+
+        const field = td.dataset.field;
+        const entryId = parseInt(td.dataset.entryId);
+        const col = COLUMNS.find(c => c.key === field);
+        const entry = _currentEntries.find(en => (en._monthlyId || en.id) === entryId);
+
+        // Mobile status cell → show inline text input with tick
+        if (col && col.type === 'status' && App.isMobile && entry) {
+            _startMobileStatusEdit(td, col, entry);
+            return;
+        }
+
+        if (col && entry) startEdit(td, col, entry);
+    }
+
+    /** Mobile status edit: text input + ✓ confirm button */
+    function _startMobileStatusEdit(td, col, entry) {
+        closeActiveEdit();
+        td.classList.add('editing');
+        currentEditCell = td;
+        _isEditing = true;
+
+        const currentVal = entry[col.key] || '';
+        const wrapper = document.createElement('div');
+        wrapper.className = 'mobile-status-picker';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'mobile-status-input';
+        input.placeholder = 'Type status...';
+        input.value = currentVal;
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+
+        const tick = document.createElement('button');
+        tick.type = 'button';
+        tick.className = 'mobile-status-tick';
+        tick.textContent = '✓';
+
+        wrapper.appendChild(input);
+        wrapper.appendChild(tick);
+        td.innerHTML = '';
+        td.appendChild(wrapper);
+        input.focus();
+
+        // Auto-match as user types
+        const STATUS_MAP = {
+            'paid': 'paid', 'pa': 'paid', 'p': 'paid',
+            'due': '', 'du': '', 'd': '',
+            'autodebit': 'autodebit', 'auto': 'autodebit', 'au': 'autodebit', 'a': 'autodebit',
+            'dailycollection': 'dailycollection', 'daily': 'dailycollection', 'dc': 'dailycollection',
+            'branchpaid': 'branchpaid', 'branch': 'branchpaid', 'bp': 'branchpaid', 'b': 'branchpaid',
+            'notinforce': 'notinforce', 'nif': 'notinforce', 'n': 'notinforce', 'not': 'notinforce',
+            'lapsed': 'notinforce', 'l': 'notinforce',
+        };
+
+        function resolveStatus(text) {
+            const t = (text || '').trim().toLowerCase();
+            if (t in STATUS_MAP) return STATUS_MAP[t];
+            // Fuzzy: find best prefix match
+            for (const [key, val] of Object.entries(STATUS_MAP)) {
+                if (key.startsWith(t) && t.length >= 1) return val;
+            }
+            return t; // Return raw if no match
+        }
+
+        async function confirmStatus() {
+            const resolved = resolveStatus(input.value);
+            const entryId = parseInt(td.dataset.entryId);
+
+            // Save
+            if (isExtraCell(td)) {
+                const extraIdx = parseInt(td.dataset.extraIdx);
+                if (!extraRowData[extraIdx]) extraRowData[extraIdx] = {};
+                extraRowData[extraIdx]['status'] = resolved;
+            } else {
+                pushUndo(entryId, 'status', currentVal, resolved);
+                if (App.state.activeTab === 'master') {
+                    await App.updateMasterEntry(entryId, 'status', resolved);
+                } else {
+                    await App.updateEntry(entryId, 'status', resolved);
+                }
+                if (_onStatusChangeCallback) _onStatusChangeCallback();
+            }
+
+            restoreCellDisplay(td, col, { status: resolved }, resolved);
+            addStatusClass(td, resolved);
+            td.classList.remove('editing');
+            td.classList.add('nav-selected');
+            currentEditCell = null;
+            _isEditing = false;
+        }
+
+        tick.addEventListener('click', (e) => { e.stopPropagation(); confirmStatus(); });
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); confirmStatus(); }
+            if (e.key === 'Escape') {
+                restoreCellDisplay(td, col, entry, currentVal);
+                addStatusClass(td, currentVal);
+                td.classList.remove('editing');
+                currentEditCell = null;
+                _isEditing = false;
+            }
         });
     }
 

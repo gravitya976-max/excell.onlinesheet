@@ -1135,19 +1135,91 @@ td.saved::after {
 }
 
 .sync-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-size: 11px;
+    color: var(--text-muted);
 }
 
-.sync-indicator.syncing {
-    color: var(--yellow);
+.sync-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #94a3b8;
+    flex-shrink: 0;
+    transition: background 0.3s ease;
 }
 
-.sync-indicator.synced {
-    color: var(--green);
+.sync-dot.sync-online {
+    background: var(--green);
 }
 
-.sync-indicator.error {
-    color: var(--red);
+.sync-dot.sync-offline {
+    background: var(--red);
+}
+
+.sync-dot.sync-pending {
+    background: var(--yellow);
+    animation: syncPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes syncPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* ── Mobile status picker (inline input + tick) ─────────────────────── */
+.mobile-status-picker {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    height: 100%;
+    padding: 0 4px;
+}
+
+.mobile-status-input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    font-size: 12px;
+    font-family: var(--font-sans);
+    background: transparent;
+    color: var(--text-primary);
+    padding: 4px 6px;
+    border-radius: 4px;
+    background: rgba(22, 163, 74, 0.06);
+    border: 1px solid var(--accent-border);
+}
+
+.mobile-status-input:focus {
+    border-color: var(--green);
+    box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.15);
+}
+
+.mobile-status-tick {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--green);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all var(--transition);
+    -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-status-tick:active {
+    transform: scale(0.9);
+    background: var(--green-dark);
 }
 
 /* ══ Modal ═══════════════════════════════════════════════════════════ */
@@ -1389,31 +1461,217 @@ td.saved::after {
     display: none !important;
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   RESPONSIVE — Mobile Optimization
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── Visibility helpers ─────────────────────────────────────────────── */
+.mobile-only { display: none !important; }
+.mobile-menu { display: none; }
+
+/* ── Touch behavior ─────────────────────────────────────────────────── */
+body {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.scroll-container {
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* ── Hamburger button ───────────────────────────────────────────────── */
+.hamburger {
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    width: 36px;
+    height: 36px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 8px;
+    transition: background var(--transition);
+    -webkit-tap-highlight-color: transparent;
+}
+
+.hamburger span {
+    display: block;
+    width: 100%;
+    height: 2.5px;
+    background: var(--green-dark);
+    border-radius: 2px;
+    transition: all 0.3s ease;
+}
+
+.hamburger.active span:nth-child(1) {
+    transform: translateY(7.5px) rotate(45deg);
+}
+
+.hamburger.active span:nth-child(2) {
+    opacity: 0;
+}
+
+.hamburger.active span:nth-child(3) {
+    transform: translateY(-7.5px) rotate(-45deg);
+}
+
+/* ── Mobile dropdown menu ───────────────────────────────────────────── */
+.mobile-menu {
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: var(--shadow-md);
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease, padding 0.3s ease;
+    padding: 0 16px;
+}
+
+.mobile-menu.open {
+    max-height: 300px;
+    padding: 10px 16px;
+}
+
+.mobile-menu-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.mobile-menu-item {
+    flex: 1;
+}
+
+/* ══ Tablet + Phone (≤768px) ════════════════════════════════════════ */
 @media (max-width: 768px) {
-    .logo h1 {
-        display: none;
+    /* Show hamburger, hide desktop header items */
+    .mobile-only { display: flex !important; }
+    .desktop-only { display: none !important; }
+    .mobile-menu { display: flex; }
+
+    /* Header: just brand + hamburger */
+    .header {
+        padding: 8px 12px;
+        gap: 8px;
     }
 
-    .month-label {
-        min-width: 80px;
-        font-size: 11px;
+    .brand-logo { width: 28px; height: 28px; }
+    .brand-name { font-size: 16px; }
+    .brand-version { display: none; }
+
+    /* Toolbar: wrap into rows */
+    .toolbar {
+        flex-wrap: wrap;
+        padding: 8px 12px;
+        gap: 8px;
     }
 
-    .spreadsheet {
-        font-size: 11px;
+    .stats {
+        padding: 4px 2px;
+        border-radius: 8px;
+        width: 100%;
+        justify-content: space-around;
     }
 
+    .stat { padding: 0 6px; font-size: 11px; gap: 3px; }
+    .stat svg { width: 12px; height: 12px; }
+    .stat-label { font-size: 9px; }
+
+    .search {
+        max-width: 100%;
+        margin: 0;
+        padding: 6px 12px;
+        order: 10;
+    }
+
+    /* Gateway / CRM buttons — hide on mobile */
+    .gateway { display: none !important; }
+
+    /* Clock — compact */
+    .datetime { display: none; }
+
+    /* Spreadsheet: hide less-essential columns */
     .col-plan,
     .col-mode,
-    .col-sumass {
-        display: none;
+    .col-sumass,
+    .col-fup,
+    .col-doc { display: none; }
+
+    .spreadsheet { font-size: 11px; }
+
+    .spreadsheet td {
+        height: 32px;
+        font-size: 11px;
     }
 
-    .btn svg+span {
-        font-size: 0;
+    .spreadsheet th {
+        padding: 6px 6px;
+        font-size: 10px;
     }
 
-    .topbar-center {
-        max-width: 200px;
+    /* Make SN delete cells bigger for touch */
+    td.sn-delete {
+        min-width: 36px;
+        cursor: pointer;
+    }
+
+    /* Footer */
+    #footer {
+        height: 32px;
+        padding: 0 12px;
+    }
+
+    /* Modals: wider on mobile */
+    .modal {
+        width: calc(100vw - 24px);
+        max-width: 100%;
+        margin: 12px;
+    }
+
+    .modal-sm {
+        width: calc(100vw - 24px);
+    }
+
+    /* CRM float box — hide on mobile */
+    .crm-float-box { display: none !important; }
+    .crm-call-modal .crm-call-card { width: calc(100vw - 32px); }
+}
+
+/* ══ Extra small phones (≤480px) ════════════════════════════════════ */
+@media (max-width: 480px) {
+    .header { padding: 6px 8px; }
+
+    .brand-name { font-size: 14px; }
+    .brand-logo { width: 24px; height: 24px; }
+
+    .toolbar { padding: 6px 8px; gap: 6px; }
+
+    .stats { padding: 4px 0; }
+    .stat { padding: 0 6px; font-size: 12px; }
+
+    .search { padding: 5px 10px; }
+    .search input { font-size: 13px; }
+
+    .spreadsheet td { font-size: 10.5px; }
+
+    .mobile-menu-row .tab { font-size: 12px; padding: 6px 10px; }
+    .mobile-menu-row .action-btn { font-size: 12px; padding: 6px 10px; }
+
+    /* Modal full-screen on very small devices */
+    .modal-overlay {
+        align-items: flex-end;
+    }
+
+    .modal {
+        width: 100vw;
+        margin: 0;
+        border-radius: 14px 14px 0 0;
+        max-height: 85vh;
+        overflow-y: auto;
     }
 }

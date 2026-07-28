@@ -515,11 +515,12 @@ tr.crm-selected:hover td {
 }
 
 /* ── Responsive ──────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .crm-tools { display: none; }
+    .crm-float-box { display: none !important; }
+    .crm-mode-btn { display: none; }
+}
+
 @media (max-width: 480px) {
-    .crm-float-box {
-        width: calc(100vw - 16px);
-        right: 8px;
-        bottom: 8px;
-    }
     .crm-call-card { width: calc(100vw - 32px); }
 }

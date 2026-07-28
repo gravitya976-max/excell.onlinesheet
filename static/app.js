@@ -6,6 +6,8 @@
    ══════════════════════════════════════════════════════════════════════ */
 
 const App = (() => {
+    const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
     const state = {
         year: new Date().getFullYear(),
         month: new Date().getMonth() + 1,
@@ -58,7 +60,11 @@ const App = (() => {
 
     // ── Month navigation ──────────────────────────────────────────────
     function updateMonthLabel() {
-        $('#current-month-label').textContent = `${MONTH_NAMES[state.month]} ${state.year}`;
+        const label = `${MONTH_NAMES[state.month]} ${state.year}`;
+        $('#current-month-label').textContent = label;
+        // Sync mobile menu label
+        const mobileLabel = document.getElementById('mobile-month-label');
+        if (mobileLabel) mobileLabel.textContent = label;
         // Set pastel header color for current month
         const table = document.querySelector('.spreadsheet');
         if (table) {
@@ -306,36 +312,51 @@ const App = (() => {
 
     // ── Update entry (monthly) ────────────────────────────────────────
     async function updateEntry(entryId, field, value) {
+        // Update DataStore immediately (local-first)
+        const entries = getEntries();
+        const entry = entries.find(e => (e._monthlyId || e.id) === entryId);
+        if (entry) {
+            const monthKey = `${state.year}-${state.month}`;
+            DataStore.updateField('monthly', entry.policyno || entry._masterPolicyno, field, value, monthKey, entryId);
+        }
+        // API call (or queue if offline)
+        const url = `/api/entry/${entryId}`;
+        const body = { [field]: value };
+        if (!navigator.onLine) {
+            await OfflineQueue.enqueue('PUT', url, body);
+            return true;
+        }
         try {
-            await api('PUT', `/api/entry/${entryId}`, { [field]: value });
-            // Find the policyno for this entry to update DataStore
-            const entries = getEntries();
-            const entry = entries.find(e => (e._monthlyId || e.id) === entryId);
-            if (entry) {
-                const monthKey = `${state.year}-${state.month}`;
-                DataStore.updateField('monthly', entry.policyno || entry._masterPolicyno, field, value, monthKey, entryId);
-            }
+            await api('PUT', url, body);
             return true;
         } catch (e) {
-            toast(`Update failed: ${e.message}`, 'error');
-            return false;
+            // Network failed mid-request — queue it
+            await OfflineQueue.enqueue('PUT', url, body);
+            return true;
         }
     }
 
     // ── Update master entry ───────────────────────────────────────────
     async function updateMasterEntry(entryId, field, value) {
+        // Update DataStore immediately
+        const entries = getEntries();
+        const entry = entries.find(e => e.id === entryId);
+        if (entry) {
+            DataStore.updateField('master', entry.policyno, field, value);
+        }
+        // API call (or queue if offline)
+        const url = `/api/master/${entryId}`;
+        const body = { [field]: value };
+        if (!navigator.onLine) {
+            await OfflineQueue.enqueue('PUT', url, body);
+            return true;
+        }
         try {
-            await api('PUT', `/api/master/${entryId}`, { [field]: value });
-            // Update DataStore
-            const entries = getEntries();
-            const entry = entries.find(e => e.id === entryId);
-            if (entry) {
-                DataStore.updateField('master', entry.policyno, field, value);
-            }
+            await api('PUT', url, body);
             return true;
         } catch (e) {
-            toast(`Update failed: ${e.message}`, 'error');
-            return false;
+            await OfflineQueue.enqueue('PUT', url, body);
+            return true;
         }
     }
 
@@ -524,12 +545,83 @@ const App = (() => {
                 Spreadsheet.resortEntries(); // Move NIF rows to bottom
             });
         }
+
+        // ── Online / Offline events ────────────────────────────────
+        window.addEventListener('online', () => {
+            toast('Back online — syncing...', 'success', 2500);
+            // Flush offline queue
+            if (typeof OfflineQueue !== 'undefined') {
+                OfflineQueue.flush().then(() => {
+                    OfflineQueue.updateIndicator();
+                });
+            }
+            // Auto-fetch fresh data
+            fetchMonthData(state.year, state.month).then(() => refreshMasterCount());
+            setTimeout(() => refreshBulkData(), 1000);
+        });
+        window.addEventListener('offline', () => {
+            toast('You are offline — changes will sync later', 'info', 3000);
+            if (typeof OfflineQueue !== 'undefined') OfflineQueue.updateIndicator();
+        });
+
+        // ── Register Service Worker ────────────────────────────────
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js').catch(() => {});
+        }
+
+        // ── Hamburger menu (mobile) ────────────────────────────────
+        const hamburger = $('#hamburger-btn');
+        const mobileMenu = $('#mobile-menu');
+        if (hamburger && mobileMenu) {
+            hamburger.addEventListener('click', () => {
+                mobileMenu.classList.toggle('open');
+                hamburger.classList.toggle('active');
+            });
+            // Close menu when tapping a menu item
+            mobileMenu.querySelectorAll('.mobile-menu-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    mobileMenu.classList.remove('open');
+                    hamburger.classList.remove('active');
+                });
+            });
+
+            // Mobile tab switching
+            mobileMenu.querySelectorAll('.tab[data-tab]').forEach(t => {
+                t.addEventListener('click', () => switchTab(t.dataset.tab));
+            });
+
+            // Mobile month nav
+            document.querySelectorAll('.mobile-prev-month').forEach(el =>
+                el.addEventListener('click', prevMonth)
+            );
+            document.querySelectorAll('.mobile-next-month').forEach(el =>
+                el.addEventListener('click', nextMonth)
+            );
+
+            // Mobile generate button
+            const mobileGen = $('#mobile-btn-generate');
+            if (mobileGen) {
+                mobileGen.addEventListener('click', () => {
+                    const isRefresh = _hasMonthlyEntries();
+                    const title = isRefresh ? '↻ Refresh Data?' : 'Generate List?';
+                    const msg = isRefresh
+                        ? `Update ${MONTH_NAMES[state.month]} ${state.year} with latest master data. Your notes & status will be preserved.`
+                        : `Create the due list for ${MONTH_NAMES[state.month]} ${state.year} from master data.`;
+                    showConfirm(title, msg, generateList);
+                });
+            }
+
+            // Mobile upload button
+            const mobileUpload = $('#mobile-btn-upload');
+            if (mobileUpload) mobileUpload.addEventListener('click', openUpload);
+        }
     }
 
     document.addEventListener('DOMContentLoaded', init);
 
     return {
         state,
+        isMobile,
         updateEntry,
         updateMasterEntry,
         deleteEntry,

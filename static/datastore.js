@@ -259,8 +259,8 @@ const DataStore = (() => {
             if (!raw) return false;
             const data = JSON.parse(raw);
             
-            // Don't use stale data (older than 1 hour)
-            if (Date.now() - (data.savedAt || 0) > 3600000) {
+            // Don't use stale data (older than 24 hours)
+            if (Date.now() - (data.savedAt || 0) > 86400000) {
                 localStorage.removeItem(STORAGE_KEY);
                 return false;
             }
