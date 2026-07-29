@@ -149,16 +149,39 @@ const Spreadsheet = (() => {
             url = `/api/list/${App.state.year}/${App.state.month}/new`;
         }
 
-        App.api('POST', url, { ...data, policyno: pno })
+        const body = { ...data, policyno: pno };
+
+        // Add to DataStore immediately (local-first)
+        const localEntry = { ...body, id: Date.now(), _local: true };
+        if (activeTab === 'master') {
+            DataStore.addEntry('master', localEntry);
+        } else {
+            const monthKey = `${App.state.year}-${App.state.month}`;
+            DataStore.addEntry('monthly', localEntry, monthKey);
+        }
+        delete extraRowData[idx];
+
+        const label = activeTab === 'master' ? 'master data' : 'monthly list';
+
+        if (!navigator.onLine) {
+            OfflineQueue.enqueue('POST', url, body);
+            App.toast(`✓ Policy ${pno} saved locally (will sync)`, 'success', 4000);
+            App.renderCurrentView();
+            return;
+        }
+
+        App.api('POST', url, body)
             .then(res => {
-                const label = activeTab === 'master' ? 'master data' : 'monthly list';
                 let msg = `✓ Policy ${pno} saved to ${label}`;
                 if (res.added_to_master) msg += ' + master data';
                 App.toast(msg, 'success', 4000);
-                delete extraRowData[idx];
                 App.reloadActive();
             })
-            .catch(err => App.toast(`Save failed: ${err.message}`, 'error'));
+            .catch(err => {
+                // Network failed mid-request — queue it
+                OfflineQueue.enqueue('POST', url, body);
+                App.toast(`✓ Policy ${pno} saved locally (will sync)`, 'success', 4000);
+            });
     }
 
     function closeActiveEdit() {

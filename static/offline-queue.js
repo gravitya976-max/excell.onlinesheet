@@ -178,5 +178,6 @@ const OfflineQueue = (() => {
         flush,
         count,
         updateIndicator,
+        getAll,
     };
 })();

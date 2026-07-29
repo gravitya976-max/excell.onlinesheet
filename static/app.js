@@ -363,17 +363,29 @@ const App = (() => {
     // ── Delete entry ──────────────────────────────────────────────────
     async function deleteEntry(entryId) {
         const table = state.activeTab === 'master' ? 'master' : 'monthly';
+        // Find entry before removing
+        const entries = getEntries();
+        const entry = entries.find(e => (e._monthlyId || e.id) === entryId);
+        const pno = entry ? (entry.policyno || entry._masterPolicyno) : '';
+
+        // Remove from DataStore immediately (local-first)
+        if (pno) DataStore.removeEntry(pno);
+        renderCurrentView();
+        refreshMasterCount();
+        toast(`Deleted: ${pno}`, 'success', 2000);
+
+        // API call (or queue if offline)
+        const url = `/api/entry/${entryId}?table=${table}`;
+        if (!navigator.onLine) {
+            await OfflineQueue.enqueue('DELETE', url, null);
+            return true;
+        }
         try {
-            const res = await api('DELETE', `/api/entry/${entryId}?table=${table}`);
-            const pno = res.policyno;
-            if (pno) DataStore.removeEntry(pno);
-            toast(`Deleted: ${pno}`, 'success', 2000);
-            renderCurrentView();
-            refreshMasterCount();
+            await api('DELETE', url);
             return true;
         } catch (e) {
-            toast(`Delete failed: ${e.message}`, 'error');
-            return false;
+            await OfflineQueue.enqueue('DELETE', url, null);
+            return true;
         }
     }
 
