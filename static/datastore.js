@@ -15,7 +15,9 @@ const DataStore = (() => {
     let _monthlyOverlays = {};       // { "2026-7": [{ policyno, status, notes... }] }
     let _monthlyMeta = {};           // { "2026-7": { id, generated_at, ... } }
     let _availableMonths = [];       // [{ year, month, id, ... }]
+    let _listeners = [];             // onChange callbacks
     let _ready = false;              // true after initial load
+    let _bulkLoaded = false;         // true after background bulk load
 
     const STORAGE_KEY = 'os_datastore_v2';
     const MONTHLY_ONLY_FIELDS = new Set(['note1','note2','note3','note4','note5',

@@ -106,21 +106,21 @@ const VirtualScroller = (() => {
     // ── Build a single row (<tr>) by global index ────────────────────
     function _buildRow(i) {
         const totalDataRows = _data.length;
-        const extraEnd = totalDataRows + EXTRA_ROWS;
+        const nifEnd = totalDataRows + _nifData.length;
         let tr;
 
         if (i < totalDataRows) {
             // Normal data row
             tr = _renderRowFn(_data[i], i);
-        } else if (i < extraEnd) {
-            // Extra (blank entry) row
-            const extraIdx = i - totalDataRows;
-            tr = _renderExtraFn(extraIdx, totalDataRows + extraIdx + 1);
+        } else if (i < nifEnd) {
+            // NIF row (after normal data)
+            const nifIdx = i - totalDataRows;
+            tr = _renderRowFn(_nifData[nifIdx], totalDataRows + nifIdx);
         } else {
-            // NIF row (after extra rows)
-            const nifIdx = i - extraEnd;
-            if (nifIdx < _nifData.length) {
-                tr = _renderRowFn(_nifData[nifIdx], totalDataRows + nifIdx);
+            // Extra (blank entry) row — at the very bottom
+            const extraIdx = i - nifEnd;
+            if (extraIdx < EXTRA_ROWS) {
+                tr = _renderExtraFn(extraIdx, totalDataRows + _nifData.length + extraIdx + 1);
             } else {
                 tr = document.createElement('tr');
             }

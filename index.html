@@ -12,8 +12,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=74">
-    <link rel="stylesheet" href="/static/crm.css?v=74">
+    <link rel="stylesheet" href="/static/style.css?v=75">
+    <link rel="stylesheet" href="/static/crm.css?v=75">
 </head>
 <body>
     <!-- Row 1: Main header -->
@@ -257,15 +257,21 @@
         <p id="loading-text">Processing...</p>
     </div>
 
+    <!-- Mobile Undo/Redo FAB -->
+    <div id="mobile-undo-redo" class="mobile-undo-redo mobile-only">
+        <button id="btn-mobile-undo" class="fab-mini" type="button" title="Undo">↩</button>
+        <button id="btn-mobile-redo" class="fab-mini" type="button" title="Redo">↪</button>
+    </div>
+
     <!-- Toast Container -->
     <div id="toast-container"></div>
 
-    <script src="/static/datastore.js?v=74"></script>
-    <script src="/static/virtual-scroller.js?v=74"></script>
-    <script src="/static/offline-queue.js?v=74"></script>
-    <script src="/static/app.js?v=74"></script>
-    <script src="/static/spreadsheet.js?v=74"></script>
-    <script src="/static/crm.js?v=74"></script>
+    <script src="/static/datastore.js?v=75"></script>
+    <script src="/static/virtual-scroller.js?v=75"></script>
+    <script src="/static/offline-queue.js?v=75"></script>
+    <script src="/static/app.js?v=75"></script>
+    <script src="/static/spreadsheet.js?v=75"></script>
+    <script src="/static/crm.js?v=75"></script>
 
     <!-- CRM: Floating Selection Box -->
     <div id="crm-float-box" class="crm-float-box">

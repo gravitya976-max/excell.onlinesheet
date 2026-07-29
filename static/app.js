@@ -626,6 +626,12 @@ const App = (() => {
             // Mobile upload button
             const mobileUpload = $('#mobile-btn-upload');
             if (mobileUpload) mobileUpload.addEventListener('click', openUpload);
+
+            // Undo/Redo FABs
+            const undoBtn = $('#btn-mobile-undo');
+            const redoBtn = $('#btn-mobile-redo');
+            if (undoBtn) undoBtn.addEventListener('click', () => Spreadsheet.undo());
+            if (redoBtn) redoBtn.addEventListener('click', () => Spreadsheet.redo());
         }
     }
 

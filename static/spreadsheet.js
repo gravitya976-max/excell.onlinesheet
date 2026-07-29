@@ -58,13 +58,15 @@ const Spreadsheet = (() => {
     /* ── Hovered row tracking (for Ctrl+C) ───────────────────────────── */
     let _hoveredRow = null;
 
-    /* ── Undo Stack ──────────────────────────────────────────────────── */
+    /* ── Undo / Redo Stacks ────────────────────────────────────────── */
     const _undoStack = [];
+    const _redoStack = [];
     const MAX_UNDO = 100;
 
     function pushUndo(entryId, field, oldValue, newValue) {
         _undoStack.push({ entryId, field, oldValue, newValue, tab: App.state.activeTab, timestamp: Date.now() });
         if (_undoStack.length > MAX_UNDO) _undoStack.shift();
+        _redoStack.length = 0; // New edit clears redo history
     }
 
     async function undo() {
@@ -73,7 +75,7 @@ const Spreadsheet = (() => {
             return;
         }
         const action = _undoStack.pop();
-        const { entryId, field, oldValue, tab } = action;
+        const { entryId, field, oldValue, newValue, tab } = action;
         let ok;
         if (tab === 'master') {
             ok = await App.updateMasterEntry(entryId, field, oldValue);
@@ -81,6 +83,7 @@ const Spreadsheet = (() => {
             ok = await App.updateEntry(entryId, field, oldValue);
         }
         if (ok) {
+            _redoStack.push(action);
             // Update cell in DOM if visible
             const tr = document.querySelector(`tr[data-entry-id="${entryId}"]`);
             if (tr) {
@@ -91,6 +94,33 @@ const Spreadsheet = (() => {
                 }
             }
             App.toast('↩ Undo done', 'success', 1500);
+        }
+    }
+
+    async function redo() {
+        if (_redoStack.length === 0) {
+            App.toast('Nothing to redo', 'info', 1500);
+            return;
+        }
+        const action = _redoStack.pop();
+        const { entryId, field, newValue, tab } = action;
+        let ok;
+        if (tab === 'master') {
+            ok = await App.updateMasterEntry(entryId, field, newValue);
+        } else {
+            ok = await App.updateEntry(entryId, field, newValue);
+        }
+        if (ok) {
+            _undoStack.push(action);
+            const tr = document.querySelector(`tr[data-entry-id="${entryId}"]`);
+            if (tr) {
+                const col = COLUMNS.find(c => c.key === field);
+                if (col) {
+                    const td = tr.querySelector(`td[data-field="${field}"]`);
+                    if (td) restoreCellDisplay(td, col, { [field]: newValue }, newValue);
+                }
+            }
+            App.toast('↪ Redo done', 'success', 1500);
         }
     }
 
@@ -462,16 +492,12 @@ const Spreadsheet = (() => {
         VirtualScroller.setAllData(_currentEntries, nifEntries);
     }
 
-    /** Lightweight re-split: moves NIF entries to bottom section.
-     *  Uses combined current + existing NIF data (already mutated in-place)
-     *  instead of re-fetching from DataStore (avoids async race). */
+    /** Lightweight re-split: moves NIF entries to bottom section */
     function resortEntries() {
         if (typeof App !== 'undefined' && App.state.activeTab !== 'list') return;
-        // Combine current normal entries + existing NIF entries into one pool
-        const existingNif = VirtualScroller.getNifData ? VirtualScroller.getNifData() : [];
-        const all = _currentEntries.concat(existingNif);
-        const nifEntries = all.filter(e => (e.status || '').toLowerCase() === 'notinforce');
-        _currentEntries = all.filter(e => (e.status || '').toLowerCase() !== 'notinforce');
+        const entries = App.getEntries();
+        const nifEntries = entries.filter(e => (e.status || '').toLowerCase() === 'notinforce');
+        _currentEntries = entries.filter(e => (e.status || '').toLowerCase() !== 'notinforce');
         VirtualScroller.setAllData(_currentEntries, nifEntries);
     }
 
@@ -718,6 +744,9 @@ const Spreadsheet = (() => {
             _selectedCell.removeAttribute('tabindex');
             _selectedCell = null;
         }
+        // Clear any stale selections left by virtual scroller re-rendering
+        document.querySelectorAll('.nav-selected').forEach(el => el.classList.remove('nav-selected'));
+        document.querySelectorAll('.nav-active-row').forEach(el => el.classList.remove('nav-active-row'));
         _isEditing = false;
     }
 
@@ -815,6 +844,11 @@ const Spreadsheet = (() => {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
             e.preventDefault(); undo(); return;
         }
+        // Ctrl+Y
+        if ((e.ctrlKey || e.metaKey) && e.key === 'y' && !_isEditing) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+            e.preventDefault(); redo(); return;
+        }
         // Ctrl+C
         if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
@@ -892,6 +926,8 @@ const Spreadsheet = (() => {
             const td = e.target.closest('td.editable, td.policyno-selectable');
             if (td) {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+                // Close any open edit on the previous cell first
+                if (currentEditCell && currentEditCell !== td) closeActiveEdit();
                 selectCell(td);
             }
         });
@@ -1206,8 +1242,9 @@ const Spreadsheet = (() => {
         _isExtraCell: isExtraCell,
         _getExtraRowData: getExtraRowData,
         _finishEdit: finishEdit,
-        // Undo
+        // Undo / Redo
         undo,
+        redo,
         pushUndo,
         // Navigation
         selectCell,
