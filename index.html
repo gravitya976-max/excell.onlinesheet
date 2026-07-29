@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -11,10 +12,13 @@
     <meta name="description" content="Monthly insurance policy due list manager with editable spreadsheet view">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css?v=75">
     <link rel="stylesheet" href="/static/crm.css?v=75">
 </head>
+
 <body>
     <!-- Row 1: Main header -->
     <header class="header" id="topbar">
@@ -29,7 +33,7 @@
                 </svg>
                 <div>
                     <div class="brand-name">Online Sheet</div>
-                    <div class="brand-version">Version 3.1.7</div>
+                    <div class="brand-version">Version 3.3.32</div>
                 </div>
             </div>
             <nav class="tabs desktop-only">
@@ -89,14 +93,16 @@
         <div class="mobile-menu-row">
             <button id="mobile-btn-generate" class="mobile-menu-item action-btn" type="button">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
-                    <path d="M3 12a9 9 0 1 0 3-6.7" /><polyline points="3 4 3 9 8 9" />
+                    <path d="M3 12a9 9 0 1 0 3-6.7" />
+                    <polyline points="3 4 3 9 8 9" />
                 </svg>
                 Generate list
             </button>
             <button id="mobile-btn-upload" class="mobile-menu-item action-btn" type="button">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
                     <path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2" />
-                    <polyline points="12 12 12 21" /><polyline points="8 16 12 12 16 16" />
+                    <polyline points="12 12 12 21" />
+                    <polyline points="8 16 12 12 16 16" />
                 </svg>
                 Upload
             </button>
@@ -169,7 +175,8 @@
             <button id="crm-call-btn" class="gateway-btn crm-mode-btn" type="button" title="Call Mode">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
-                    <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
+                    <path
+                        d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
                 </svg>
             </button>
             <button id="crm-queue-btn" class="gateway-btn crm-mode-btn" type="button" title="SMS Queue">
@@ -189,17 +196,22 @@
     <!-- Spreadsheet Container -->
     <div id="spreadsheet-wrapper">
         <div id="empty-state" class="empty-state">
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4">
-                <rect x="3" y="3" width="18" height="18" rx="2"/>
-                <line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/>
-                <line x1="9" y1="3" x2="9" y2="21"/>
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                opacity="0.4">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <line x1="3" y1="9" x2="21" y2="9" />
+                <line x1="3" y1="15" x2="21" y2="15" />
+                <line x1="9" y1="3" x2="9" y2="21" />
             </svg>
             <h2>No list for this month</h2>
-            <p>Upload data sheets first, then click <strong>"Generate List"</strong> to create this month's due list.</p>
+            <p>Upload data sheets first, then click <strong>"Generate List"</strong> to create this month's due list.
+            </p>
         </div>
         <div id="scroll-container" class="scroll-container">
             <table id="spreadsheet" class="spreadsheet">
-                <thead><tr id="header-row"></tr></thead>
+                <thead>
+                    <tr id="header-row"></tr>
+                </thead>
                 <tbody id="spreadsheet-body"></tbody>
             </table>
         </div>
@@ -220,13 +232,19 @@
             <div class="modal-header">
                 <h2>Upload Data Sheets</h2>
                 <button id="btn-close-upload" class="icon-btn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
                 </button>
             </div>
             <div class="modal-body">
                 <div id="drop-zone" class="drop-zone">
-                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
-                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+                        opacity="0.5">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
                     </svg>
                     <p>Drag & drop Excel files here</p>
                     <p class="form-hint">or click to browse (.xlsx, .xlsm)</p>
@@ -240,7 +258,9 @@
     <!-- Confirm Modal -->
     <div id="confirm-overlay" class="modal-overlay hidden">
         <div class="modal modal-sm" role="dialog" aria-label="Confirm">
-            <div class="modal-header"><h2 id="confirm-title">Confirm</h2></div>
+            <div class="modal-header">
+                <h2 id="confirm-title">Confirm</h2>
+            </div>
             <div class="modal-body">
                 <p id="confirm-message"></p>
                 <div class="form-actions">
@@ -255,12 +275,6 @@
     <div id="loading-overlay" class="loading-overlay hidden">
         <div class="spinner"></div>
         <p id="loading-text">Processing...</p>
-    </div>
-
-    <!-- Mobile Undo/Redo FAB -->
-    <div id="mobile-undo-redo" class="mobile-undo-redo mobile-only">
-        <button id="btn-mobile-undo" class="fab-mini" type="button" title="Undo">↩</button>
-        <button id="btn-mobile-redo" class="fab-mini" type="button" title="Redo">↪</button>
     </div>
 
     <!-- Toast Container -->
@@ -304,4 +318,5 @@
         </div>
     </div>
 </body>
+
 </html>
