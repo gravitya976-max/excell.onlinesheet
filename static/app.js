@@ -578,7 +578,9 @@ const App = (() => {
 
         // ── Register Service Worker ────────────────────────────────
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').catch(() => {});
+            navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+                .then(reg => { if (reg) reg.update(); })
+                .catch(() => {});
         }
 
         // ── Hamburger menu (mobile) ────────────────────────────────

@@ -1562,7 +1562,7 @@ body {
 
     .brand-logo { width: 28px; height: 28px; }
     .brand-name { font-size: 16px; }
-    .brand-version { display: none; }
+    .brand-version { font-size: 9px; opacity: 0.7; }
 
     /* Toolbar: wrap into rows */
     .toolbar {
