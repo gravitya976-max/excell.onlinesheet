@@ -1110,12 +1110,28 @@ const Spreadsheet = (() => {
                 extraRowData[extraIdx]['status'] = resolved;
             } else {
                 pushUndo(entryId, 'status', currentVal, resolved);
+                // Mutate entry directly (same as applyStatusKey)
+                entry[col.key] = resolved;
                 if (App.state.activeTab === 'master') {
                     await App.updateMasterEntry(entryId, 'status', resolved);
                 } else {
                     await App.updateEntry(entryId, 'status', resolved);
                 }
-                if (_onStatusChangeCallback) _onStatusChangeCallback();
+                // Handle NIF transition with animation
+                if (_onStatusChangeCallback && resolved !== currentVal) {
+                    const isNifTransition = resolved === 'notinforce' || currentVal === 'notinforce';
+                    if (isNifTransition) {
+                        const tr = td.closest('tr');
+                        if (tr) {
+                            tr.classList.add('nif-departing');
+                            setTimeout(() => _onStatusChangeCallback(), 350);
+                        } else {
+                            _onStatusChangeCallback();
+                        }
+                    } else {
+                        _onStatusChangeCallback();
+                    }
+                }
             }
 
             restoreCellDisplay(td, col, { status: resolved }, resolved);
