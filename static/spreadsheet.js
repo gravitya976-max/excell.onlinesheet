@@ -215,29 +215,54 @@ const Spreadsheet = (() => {
     }
 
     function closeActiveEdit() {
-        // Close currentEditCell if it has any input
+        // Close currentEditCell first
         if (currentEditCell) {
-            const inp = currentEditCell.querySelector('input.cell-input, select.cell-input, input.mobile-status-input');
-            if (inp) inp.blur();
-            currentEditCell.classList.remove('editing');
+            _closeSingleEdit(currentEditCell);
             currentEditCell = null;
             _isEditing = false;
         }
         // Global sweep: close ANY leftover editing cells (stale from virtual scroller)
-        document.querySelectorAll('td.editing').forEach(td => {
-            const picker = td.querySelector('.mobile-status-picker');
-            if (picker) {
-                // Restore cell to its original display
-                const entryId = td.dataset.entryId;
-                const field = td.dataset.field || 'status';
-                const entry = _currentEntries.find(e => (e._monthlyId || e.id) === parseInt(entryId));
-                const col = COLUMNS.find(c => c.key === field);
-                const val = entry ? (entry[field] || '') : '';
-                restoreCellDisplay(td, col, entry || {}, val);
-                addStatusClass(td, val);
+        document.querySelectorAll('td.editing').forEach(td => _closeSingleEdit(td));
+    }
+
+    /** Close a single editing td — auto-save if value changed, else restore */
+    function _closeSingleEdit(td) {
+        const input = td.querySelector('input.mobile-status-input');
+        if (input && td._mobileEditOriginal !== undefined) {
+            // Mobile status picker — auto-save if value changed
+            const original = td._mobileEditOriginal;
+            const entry = td._mobileEditEntry;
+            const col = td._mobileEditCol;
+            const raw = (input.value || '').trim().toLowerCase();
+            let resolved = '';
+            if (raw) {
+                if (STATUS_KEYS[raw] !== undefined) resolved = STATUS_KEYS[raw];
+                else if (STATUS_OPTIONS.includes(raw)) resolved = raw;
+                else { const m = STATUS_OPTIONS.find(s => s && s.startsWith(raw)); resolved = m || raw; }
             }
+            const finalVal = resolved || original;
+
+            if (resolved && resolved !== original && entry) {
+                // Value changed — save it
+                const entryId = parseInt(td.dataset.entryId);
+                entry[col.key] = resolved;
+                if (App.state.activeTab === 'master') {
+                    App.updateMasterEntry(entryId, 'status', resolved);
+                } else {
+                    App.updateEntry(entryId, 'status', resolved);
+                }
+                if (_onStatusChangeCallback) _onStatusChangeCallback();
+            }
+
+            restoreCellDisplay(td, col, { status: finalVal }, finalVal);
+            addStatusClass(td, finalVal);
+            _cleanupMobileEdit(td);
+        } else {
+            // Regular cell-input or select
+            const inp = td.querySelector('input.cell-input, select.cell-input');
+            if (inp) inp.blur();
             td.classList.remove('editing');
-        });
+        }
     }
 
     /* ── Active columns helper ───────────────────────────────────────── */
@@ -1127,16 +1152,20 @@ const Spreadsheet = (() => {
         if (col && entry) startEdit(td, col, entry);
     }
 
-    /** Mobile status edit: text input + ✓ confirm button */
+    /** Mobile status edit: text input + ✓ floating outside cell */
     function _startMobileStatusEdit(td, col, entry) {
         closeActiveEdit();
         td.classList.add('editing');
+        td.style.position = 'relative';
         currentEditCell = td;
         _isEditing = true;
 
         const currentVal = entry[col.key] || '';
-        const wrapper = document.createElement('div');
-        wrapper.className = 'mobile-status-picker';
+
+        // Store original value on td for closeActiveEdit to use
+        td._mobileEditOriginal = currentVal;
+        td._mobileEditEntry = entry;
+        td._mobileEditCol = col;
 
         const input = document.createElement('input');
         input.type = 'text';
@@ -1151,78 +1180,75 @@ const Spreadsheet = (() => {
         tick.className = 'mobile-status-tick';
         tick.textContent = '✓';
 
-        wrapper.appendChild(input);
-        wrapper.appendChild(tick);
         td.innerHTML = '';
-        td.appendChild(wrapper);
+        td.appendChild(input);
+        td.appendChild(tick);
         input.focus();
 
         function resolveStatus(text) {
             const t = (text || '').trim().toLowerCase();
             if (!t) return '';
-            // Direct key match (p/a/d/c/b/n)
             if (STATUS_KEYS[t] !== undefined) return STATUS_KEYS[t];
-            // Exact match against known statuses
             if (STATUS_OPTIONS.includes(t)) return t;
-            // Prefix match against known statuses
             const match = STATUS_OPTIONS.find(s => s && s.startsWith(t));
             return match || t;
         }
 
-        async function confirmStatus() {
+        async function confirmAndClose() {
             const resolved = resolveStatus(input.value);
             const entryId = parseInt(td.dataset.entryId);
 
-            // Save
             if (isExtraCell(td)) {
                 const extraIdx = parseInt(td.dataset.extraIdx);
                 if (!extraRowData[extraIdx]) extraRowData[extraIdx] = {};
                 extraRowData[extraIdx]['status'] = resolved;
-            } else {
+            } else if (resolved !== currentVal) {
                 pushUndo(entryId, 'status', currentVal, resolved);
-                // Mutate entry directly (same as applyStatusKey)
                 entry[col.key] = resolved;
                 if (App.state.activeTab === 'master') {
                     await App.updateMasterEntry(entryId, 'status', resolved);
                 } else {
                     await App.updateEntry(entryId, 'status', resolved);
                 }
-                // Handle NIF transition with animation
-                if (_onStatusChangeCallback && resolved !== currentVal) {
+                if (_onStatusChangeCallback) {
                     const isNifTransition = resolved === 'notinforce' || currentVal === 'notinforce';
                     if (isNifTransition) {
                         const tr = td.closest('tr');
                         if (tr) {
                             tr.classList.add('nif-departing');
                             setTimeout(() => _onStatusChangeCallback(), 350);
-                        } else {
-                            _onStatusChangeCallback();
-                        }
-                    } else {
-                        _onStatusChangeCallback();
-                    }
+                        } else { _onStatusChangeCallback(); }
+                    } else { _onStatusChangeCallback(); }
                 }
             }
 
-            restoreCellDisplay(td, col, { status: resolved }, resolved);
-            addStatusClass(td, resolved);
-            td.classList.remove('editing');
-            td.classList.add('nav-selected');
-            currentEditCell = null;
-            _isEditing = false;
+            restoreCellDisplay(td, col, { status: resolved || currentVal }, resolved || currentVal);
+            addStatusClass(td, resolved || currentVal);
+            _cleanupMobileEdit(td);
+            deselectCell();
         }
 
-        tick.addEventListener('click', (e) => { e.stopPropagation(); confirmStatus(); });
+        tick.addEventListener('click', (e) => { e.stopPropagation(); confirmAndClose(); });
         input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); confirmStatus(); }
+            if (e.key === 'Enter') { e.preventDefault(); confirmAndClose(); }
             if (e.key === 'Escape') {
                 restoreCellDisplay(td, col, entry, currentVal);
                 addStatusClass(td, currentVal);
-                td.classList.remove('editing');
-                currentEditCell = null;
-                _isEditing = false;
+                _cleanupMobileEdit(td);
+                deselectCell();
             }
         });
+    }
+
+    /** Clean up mobile edit state from a td */
+    function _cleanupMobileEdit(td) {
+        td.classList.remove('editing');
+        td.style.position = '';
+        delete td._mobileEditOriginal;
+        delete td._mobileEditEntry;
+        delete td._mobileEditCol;
+        currentEditCell = null;
+        _isEditing = false;
     }
 
     /* ── Init delegation once DOM ready ──────────────────────────── */
