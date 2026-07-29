@@ -1078,25 +1078,16 @@ const Spreadsheet = (() => {
         td.appendChild(wrapper);
         input.focus();
 
-        // Auto-match as user types
-        const STATUS_MAP = {
-            'paid': 'paid', 'pa': 'paid', 'p': 'paid',
-            'due': '', 'du': '', 'd': '',
-            'autodebit': 'autodebit', 'auto': 'autodebit', 'au': 'autodebit', 'a': 'autodebit',
-            'dailycollection': 'dailycollection', 'daily': 'dailycollection', 'dc': 'dailycollection',
-            'branchpaid': 'branchpaid', 'branch': 'branchpaid', 'bp': 'branchpaid', 'b': 'branchpaid',
-            'notinforce': 'notinforce', 'nif': 'notinforce', 'n': 'notinforce', 'not': 'notinforce',
-            'lapsed': 'notinforce', 'l': 'notinforce',
-        };
-
         function resolveStatus(text) {
             const t = (text || '').trim().toLowerCase();
-            if (t in STATUS_MAP) return STATUS_MAP[t];
-            // Fuzzy: find best prefix match
-            for (const [key, val] of Object.entries(STATUS_MAP)) {
-                if (key.startsWith(t) && t.length >= 1) return val;
-            }
-            return t; // Return raw if no match
+            if (!t) return '';
+            // Direct key match (p/a/d/c/b/n)
+            if (STATUS_KEYS[t] !== undefined) return STATUS_KEYS[t];
+            // Exact match against known statuses
+            if (STATUS_OPTIONS.includes(t)) return t;
+            // Prefix match against known statuses
+            const match = STATUS_OPTIONS.find(s => s && s.startsWith(t));
+            return match || t;
         }
 
         async function confirmStatus() {
