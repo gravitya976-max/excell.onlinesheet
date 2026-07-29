@@ -215,10 +215,29 @@ const Spreadsheet = (() => {
     }
 
     function closeActiveEdit() {
+        // Close currentEditCell if it has any input
         if (currentEditCell) {
-            const inp = currentEditCell.querySelector('input.cell-input, select.cell-input');
+            const inp = currentEditCell.querySelector('input.cell-input, select.cell-input, input.mobile-status-input');
             if (inp) inp.blur();
+            currentEditCell.classList.remove('editing');
+            currentEditCell = null;
+            _isEditing = false;
         }
+        // Global sweep: close ANY leftover editing cells (stale from virtual scroller)
+        document.querySelectorAll('td.editing').forEach(td => {
+            const picker = td.querySelector('.mobile-status-picker');
+            if (picker) {
+                // Restore cell to its original display
+                const entryId = td.dataset.entryId;
+                const field = td.dataset.field || 'status';
+                const entry = _currentEntries.find(e => (e._monthlyId || e.id) === parseInt(entryId));
+                const col = COLUMNS.find(c => c.key === field);
+                const val = entry ? (entry[field] || '') : '';
+                restoreCellDisplay(td, col, entry || {}, val);
+                addStatusClass(td, val);
+            }
+            td.classList.remove('editing');
+        });
     }
 
     /* ── Active columns helper ───────────────────────────────────────── */
@@ -926,8 +945,9 @@ const Spreadsheet = (() => {
             const td = e.target.closest('td.editable, td.policyno-selectable');
             if (td) {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-                // Close any open edit on the previous cell first
-                if (currentEditCell && currentEditCell !== td) closeActiveEdit();
+                if (e.target.closest('.mobile-status-picker')) return;
+                // Close ALL open edits before selecting new cell
+                closeActiveEdit();
                 selectCell(td);
             }
         });

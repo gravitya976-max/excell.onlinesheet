@@ -4,17 +4,17 @@
    • Network-first for API calls (fresh data when online, cached when offline)
    ══════════════════════════════════════════════════════════════════════ */
 
-const CACHE_NAME = 'os-cache-v76';
+const CACHE_NAME = 'os-cache-v77';
 const STATIC_ASSETS = [
     '/',
-    '/static/style.css?v=76',
-    '/static/crm.css?v=76',
-    '/static/datastore.js?v=76',
-    '/static/virtual-scroller.js?v=76',
-    '/static/offline-queue.js?v=76',
-    '/static/app.js?v=76',
-    '/static/spreadsheet.js?v=76',
-    '/static/crm.js?v=76',
+    '/static/style.css?v=77',
+    '/static/crm.css?v=77',
+    '/static/datastore.js?v=77',
+    '/static/virtual-scroller.js?v=77',
+    '/static/offline-queue.js?v=77',
+    '/static/app.js?v=77',
+    '/static/spreadsheet.js?v=77',
+    '/static/crm.js?v=77',
     '/static/favicon.png',
 ];
 
