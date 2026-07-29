@@ -396,6 +396,18 @@ def upsert_master(records):
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
+@app.get("/sw.js")
+def service_worker():
+    """Serve SW with no-cache so browsers always check for updates."""
+    from fastapi.responses import Response
+    sw_path = os.path.join(BASE_DIR, "sw.js")
+    content = open(sw_path, encoding="utf-8").read()
+    return Response(
+        content=content,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Service-Worker-Allowed": "/"}
+    )
+
 @app.get("/")
 def root():
     return HTMLResponse(open(os.path.join(BASE_DIR, "index.html"), encoding="utf-8").read())
