@@ -90,8 +90,10 @@ def init_crm_db():
             id INTEGER PRIMARY KEY DEFAULT 1,
             last_seen TIMESTAMP
         )""")
-        # Ensure heartbeat row exists
-        conn.execute("INSERT OR IGNORE INTO gateway_heartbeat (id, last_seen) VALUES (1, NULL)")
+        # Ensure heartbeat row exists — but NEVER reset last_seen if row already exists
+        existing = conn.execute("SELECT id FROM gateway_heartbeat WHERE id = 1").fetchone()
+        if not existing:
+            conn.execute("INSERT INTO gateway_heartbeat (id, last_seen) VALUES (1, NULL)")
 
 
 # GSM 7-bit only (no Unicode like ₹ — that triggers UCS-2 = 70 chars/segment).
