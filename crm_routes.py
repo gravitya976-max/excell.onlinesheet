@@ -608,8 +608,10 @@ async def gateway_ping(x_gateway_key: Optional[str] = Header(None)):
     """Android posts every 30s to signal it's alive."""
     verify_gateway_key(x_gateway_key)
 
+    now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     with get_crm_db() as conn:
-        conn.execute("UPDATE gateway_heartbeat SET last_seen = datetime('now') WHERE id = 1")
+        conn.execute("UPDATE gateway_heartbeat SET last_seen = ? WHERE id = 1", (now_utc,))
+    log.info(f"Gateway ping received, last_seen={now_utc}")
 
     return {"ok": True}
 
@@ -621,15 +623,20 @@ async def gateway_status():
         row = conn.execute("SELECT last_seen FROM gateway_heartbeat WHERE id = 1").fetchone()
 
     if not row or not row.get("last_seen"):
+        log.warning("Gateway status: no last_seen in DB")
         return {"online": False, "last_seen": None}
 
     last = row["last_seen"]
     # Online = last_seen within 2 minutes
     try:
         ls_dt = datetime.fromisoformat(last.replace("Z", "+00:00")) if "T" in last else datetime.strptime(last, "%Y-%m-%d %H:%M:%S")
-        diff = (datetime.utcnow() - ls_dt).total_seconds()
+        now = datetime.utcnow()
+        diff = (now - ls_dt).total_seconds()
         online = diff < 120
-    except Exception:
+        if not online:
+            log.warning(f"Gateway offline: last_seen={last}, now={now.strftime('%Y-%m-%d %H:%M:%S')}, diff={diff:.0f}s")
+    except Exception as exc:
+        log.error(f"Gateway status parse error: last_seen={last!r}, err={exc}")
         online = False
 
     return {"online": online, "last_seen": last}
