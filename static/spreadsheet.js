@@ -549,39 +549,42 @@ const Spreadsheet = (() => {
         const effectivePrefix = datePrefix;
 
         input.addEventListener('blur', () => {
-            // If blur was caused by switching browser tabs, re-focus when tab returns
-            if (document.hidden) {
-                const onVisible = () => {
-                    document.removeEventListener('visibilitychange', onVisible);
-                    if (input.isConnected) input.focus();
-                };
-                document.addEventListener('visibilitychange', onVisible);
-                return; // don't finalize the edit yet
-            }
+            // Delay to let visibilitychange fire first (blur fires before document.hidden is set)
+            setTimeout(() => {
+                // If blur was caused by switching browser tabs, re-focus when tab returns
+                if (document.hidden) {
+                    const onVisible = () => {
+                        document.removeEventListener('visibilitychange', onVisible);
+                        if (input.isConnected) input.focus();
+                    };
+                    document.addEventListener('visibilitychange', onVisible);
+                    return; // don't finalize the edit yet
+                }
 
-            let nv = input.value.trim();
-            finishEdit(td);
-            _isEditing = false;
+                let nv = input.value.trim();
+                finishEdit(td);
+                _isEditing = false;
 
-            // Recombine: only use today's date if text actually changed
-            if (isNote && nv) {
-                const changed = nv !== textPart;
-                const prefix = changed ? _todayPrefix : effectivePrefix;
-                nv = prefix + nv;
-            } else if (effectivePrefix && !nv) {
-                // User cleared the text — save empty (removes the date too)
-                nv = '';
-            }
-            // No prefix and no value → stays empty, no date added
+                // Recombine: only use today's date if text actually changed
+                if (isNote && nv) {
+                    const changed = nv !== textPart;
+                    const prefix = changed ? _todayPrefix : effectivePrefix;
+                    nv = prefix + nv;
+                } else if (effectivePrefix && !nv) {
+                    // User cleared the text — save empty (removes the date too)
+                    nv = '';
+                }
+                // No prefix and no value → stays empty, no date added
 
-            if (nv !== value) {
-                const entryId = parseInt(td.dataset.entryId);
-                pushUndo(entryId, col.key, value, nv);
-                entry[col.key] = nv;
-                saveCell(td, entryId, col.key, nv);
-            }
-            restoreCellDisplay(td, col, entry, nv);
-            selectCell(td);
+                if (nv !== value) {
+                    const entryId = parseInt(td.dataset.entryId);
+                    pushUndo(entryId, col.key, value, nv);
+                    entry[col.key] = nv;
+                    saveCell(td, entryId, col.key, nv);
+                }
+                restoreCellDisplay(td, col, entry, nv);
+                selectCell(td);
+            }, 50);
         });
 
         input.addEventListener('keydown', (e) => {
