@@ -1202,7 +1202,54 @@ const Spreadsheet = (() => {
     }
 
     /* ── Init delegation once DOM ready ──────────────────────────── */
-    document.addEventListener('DOMContentLoaded', initDelegation);
+    // ── Mouse-driven horizontal auto-scroll ────────────────────────
+    // When mouse is within 100px of left/right edge of the spreadsheet
+    // container, it scrolls horizontally at medium speed. Stops when
+    // mouse moves out of the zone.
+    function initAutoScroll() {
+        const container = document.querySelector('.table-container') || document.querySelector('.spreadsheet')?.parentElement;
+        if (!container) return;
+
+        const EDGE_ZONE = 100;      // px from edge to trigger
+        const SCROLL_SPEED = 4;     // px per frame (~240px/sec at 60fps)
+        let _scrollDir = 0;         // -1 = left, 0 = stop, 1 = right
+        let _rafId = null;
+
+        function scrollLoop() {
+            if (_scrollDir === 0) { _rafId = null; return; }
+            container.scrollLeft += _scrollDir * SCROLL_SPEED;
+            _rafId = requestAnimationFrame(scrollLoop);
+        }
+
+        function startScroll(dir) {
+            if (_scrollDir === dir) return; // already scrolling this way
+            _scrollDir = dir;
+            if (!_rafId) _rafId = requestAnimationFrame(scrollLoop);
+        }
+
+        function stopScroll() {
+            _scrollDir = 0;
+            if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
+        }
+
+        container.addEventListener('mousemove', (e) => {
+            const rect = container.getBoundingClientRect();
+            const fromLeft = e.clientX - rect.left;
+            const fromRight = rect.right - e.clientX;
+
+            if (fromRight < EDGE_ZONE && fromRight >= 0) {
+                startScroll(1);  // scroll right
+            } else if (fromLeft < EDGE_ZONE && fromLeft >= 0) {
+                startScroll(-1); // scroll left
+            } else {
+                stopScroll();
+            }
+        });
+
+        container.addEventListener('mouseleave', stopScroll);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => { initDelegation(); initAutoScroll(); });
 
     /* ── Realtime Clock ────────────────────────────────────────────── */
     function startClock() {
