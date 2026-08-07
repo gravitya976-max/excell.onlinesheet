@@ -560,6 +560,9 @@ const App = (() => {
             });
         }
 
+        // Initialize UndoManager keyboard bindings (Ctrl+Z, Ctrl+Y)
+        if (typeof UndoManager !== 'undefined') UndoManager.initKeyboard();
+
         // ── Online / Offline events ────────────────────────────────
         window.addEventListener('online', () => {
             toast('Back online — syncing...', 'success', 2500);
@@ -634,8 +637,8 @@ const App = (() => {
             // Undo/Redo FABs
             const undoBtn = $('#btn-mobile-undo');
             const redoBtn = $('#btn-mobile-redo');
-            if (undoBtn) undoBtn.addEventListener('click', () => Spreadsheet.undo());
-            if (redoBtn) redoBtn.addEventListener('click', () => Spreadsheet.redo());
+            if (undoBtn) undoBtn.addEventListener('click', () => UndoManager.undo());
+            if (redoBtn) redoBtn.addEventListener('click', () => UndoManager.redo());
         }
     }
 

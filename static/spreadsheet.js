@@ -60,70 +60,9 @@ const Spreadsheet = (() => {
     /* ── Hovered row tracking (for Ctrl+C) ───────────────────────────── */
     let _hoveredRow = null;
 
-    /* ── Undo / Redo Stacks ────────────────────────────────────────── */
-    const _undoStack = [];
-    const _redoStack = [];
-    const MAX_UNDO = 100;
-
+    /* ── Undo / Redo — delegated to UndoManager module ────────────── */
     function pushUndo(entryId, field, oldValue, newValue) {
-        _undoStack.push({ entryId, field, oldValue, newValue, tab: App.state.activeTab, timestamp: Date.now() });
-        if (_undoStack.length > MAX_UNDO) _undoStack.shift();
-        _redoStack.length = 0; // New edit clears redo history
-    }
-
-    async function undo() {
-        if (_undoStack.length === 0) {
-            App.toast('Nothing to undo', 'info', 1500);
-            return;
-        }
-        const action = _undoStack.pop();
-        const { entryId, field, oldValue, newValue, tab } = action;
-        let ok;
-        if (tab === 'master') {
-            ok = await App.updateMasterEntry(entryId, field, oldValue);
-        } else {
-            ok = await App.updateEntry(entryId, field, oldValue);
-        }
-        if (ok) {
-            _redoStack.push(action);
-            // Update cell in DOM if visible
-            const tr = document.querySelector(`tr[data-entry-id="${entryId}"]`);
-            if (tr) {
-                const col = COLUMNS.find(c => c.key === field);
-                if (col) {
-                    const td = tr.querySelector(`td[data-field="${field}"]`);
-                    if (td) restoreCellDisplay(td, col, { [field]: oldValue }, oldValue);
-                }
-            }
-            App.toast('↩ Undo done', 'success', 1500);
-        }
-    }
-
-    async function redo() {
-        if (_redoStack.length === 0) {
-            App.toast('Nothing to redo', 'info', 1500);
-            return;
-        }
-        const action = _redoStack.pop();
-        const { entryId, field, newValue, tab } = action;
-        let ok;
-        if (tab === 'master') {
-            ok = await App.updateMasterEntry(entryId, field, newValue);
-        } else {
-            ok = await App.updateEntry(entryId, field, newValue);
-        }
-        if (ok) {
-            _undoStack.push(action);
-            const tr = document.querySelector(`tr[data-entry-id="${entryId}"]`);
-            if (tr) {
-                const col = COLUMNS.find(c => c.key === field);
-                if (col) {
-                    const td = tr.querySelector(`td[data-field="${field}"]`);
-                    if (td) restoreCellDisplay(td, col, { [field]: newValue }, newValue);
-                }
-            }
-            App.toast('↪ Redo done', 'success', 1500);
-        }
+        UndoManager.record({ entryId, field, oldValue, newValue, tab: App.state.activeTab });
     }
 
     /* ── Copy policy number ──────────────────────────────────────────── */
@@ -581,12 +520,15 @@ const Spreadsheet = (() => {
             }
         }
 
-        // Always use today's date for notes (date = last modified)
+        // Prepare today's date — will only be applied if value changes
+        let _todayPrefix = '';
         if (isNote) {
             const now = new Date();
             const dd = String(now.getDate()).padStart(2, '0');
             const mm = String(now.getMonth() + 1).padStart(2, '0');
-            datePrefix = `${dd}/${mm} - `;
+            _todayPrefix = `${dd}/${mm} - `;
+            // Show existing date prefix if present, or today's date
+            datePrefix = value ? (value.match(DATE_PREFIX_RE) ? value.match(DATE_PREFIX_RE)[0].trim().replace(/\s*-\s*$/, '') + ' - ' : _todayPrefix) : _todayPrefix;
         }
 
         // Build the cell: [locked date prefix] [input]
@@ -607,13 +549,25 @@ const Spreadsheet = (() => {
         const effectivePrefix = datePrefix;
 
         input.addEventListener('blur', () => {
+            // If blur was caused by switching browser tabs, re-focus when tab returns
+            if (document.hidden) {
+                const onVisible = () => {
+                    document.removeEventListener('visibilitychange', onVisible);
+                    if (input.isConnected) input.focus();
+                };
+                document.addEventListener('visibilitychange', onVisible);
+                return; // don't finalize the edit yet
+            }
+
             let nv = input.value.trim();
             finishEdit(td);
             _isEditing = false;
 
-            // Recombine: prefix + edited text
-            if (effectivePrefix && nv) {
-                nv = effectivePrefix + nv;
+            // Recombine: only use today's date if text actually changed
+            if (isNote && nv) {
+                const changed = nv !== textPart;
+                const prefix = changed ? _todayPrefix : effectivePrefix;
+                nv = prefix + nv;
             } else if (effectivePrefix && !nv) {
                 // User cleared the text — save empty (removes the date too)
                 nv = '';
@@ -885,16 +839,7 @@ const Spreadsheet = (() => {
 
     /* ── Keyboard handler ──────────────────────────────────────────────── */
     function onKeyDown(e) {
-        // Ctrl+Z
-        if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !_isEditing) {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
-            e.preventDefault(); undo(); return;
-        }
-        // Ctrl+Y
-        if ((e.ctrlKey || e.metaKey) && e.key === 'y' && !_isEditing) {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
-            e.preventDefault(); redo(); return;
-        }
+        // Ctrl+Z / Ctrl+Y — handled by UndoManager (global listener)
         // Ctrl+C
         if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
@@ -1290,10 +1235,11 @@ const Spreadsheet = (() => {
         _isExtraCell: isExtraCell,
         _getExtraRowData: getExtraRowData,
         _finishEdit: finishEdit,
-        // Undo / Redo
-        undo,
-        redo,
+        // Undo (delegated to UndoManager)
         pushUndo,
+        // Cell display for UndoManager
+        restoreCell: restoreCellDisplay,
+        getActiveCols,
         // Navigation
         selectCell,
         deselectCell,

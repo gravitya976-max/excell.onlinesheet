@@ -732,6 +732,12 @@ const CRM = (() => {
 
         // Toggle body class to suppress spreadsheet row highlight during SMS mode
         document.body.classList.toggle('crm-sms-active', mode === 'sms' || mode === 'sms-custom');
+        document.body.classList.toggle('crm-call-active', mode === 'call');
+
+        // Clear call row highlights when leaving call mode
+        if (mode !== 'call') {
+            document.querySelectorAll('.crm-call-highlight').forEach(r => r.classList.remove('crm-call-highlight'));
+        }
 
         // Toggle wrapper class to hide flyout when mode is active
         const wrapper = $('#crm-sms-wrapper');
@@ -771,7 +777,7 @@ const CRM = (() => {
         if (mode === 'sms' || mode === 'sms-custom') {
             handleSmsRowClick(tr, entry);
         } else if (mode === 'call') {
-            handleCallRowClick(entry);
+            handleCallRowClick(tr, entry);
         }
     }
 
@@ -1592,7 +1598,7 @@ const CRM = (() => {
     // ── Call mode ────────────────────────────────────────────────────
     let pendingCall = null;
 
-    function handleCallRowClick(entry) {
+    function handleCallRowClick(tr, entry) {
         // Block calls when gateway is offline
         if (!gatewayOnline) {
             App.toast('Gateway is offline — calls unavailable', 'error', 3000);
@@ -1611,6 +1617,10 @@ const CRM = (() => {
             mobile: mobile,
         };
 
+        // Highlight the clicked row
+        document.querySelectorAll('.crm-call-highlight').forEach(r => r.classList.remove('crm-call-highlight'));
+        if (tr) tr.classList.add('crm-call-highlight');
+
         const modal = $('#crm-call-modal');
         $('#crm-call-name').textContent = pendingCall.name;
         $('#crm-call-pno').textContent = pendingCall.policy_no;
@@ -1620,6 +1630,8 @@ const CRM = (() => {
 
     function closeCallModal() {
         $('#crm-call-modal')?.classList.remove('visible');
+        // Remove row highlight
+        document.querySelectorAll('.crm-call-highlight').forEach(r => r.classList.remove('crm-call-highlight'));
         pendingCall = null;
     }
 
