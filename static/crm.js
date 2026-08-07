@@ -1615,11 +1615,8 @@ const CRM = (() => {
             policy_no: entry.policyno || '',
             name: entry.name || '',
             mobile: mobile,
+            _tr: tr,  // store reference for post-confirm highlight
         };
-
-        // Highlight the clicked row
-        document.querySelectorAll('.crm-call-highlight').forEach(r => r.classList.remove('crm-call-highlight'));
-        if (tr) tr.classList.add('crm-call-highlight');
 
         const modal = $('#crm-call-modal');
         $('#crm-call-name').textContent = pendingCall.name;
@@ -1630,20 +1627,21 @@ const CRM = (() => {
 
     function closeCallModal() {
         $('#crm-call-modal')?.classList.remove('visible');
-        // Remove row highlight
-        document.querySelectorAll('.crm-call-highlight').forEach(r => r.classList.remove('crm-call-highlight'));
         pendingCall = null;
     }
 
     async function confirmCall() {
         if (!pendingCall) return;
-        const callData = { ...pendingCall };
+        const callData = { policy_no: pendingCall.policy_no, name: pendingCall.name, mobile: pendingCall.mobile };
         const callName = pendingCall.name;
+        const calledTr = pendingCall._tr;
         closeCallModal();
 
         try {
             await App.api('POST', '/api/calls/trigger', callData);
             App.toast(`Calling ${callName}...`, 'success', 3000);
+            // Highlight row AFTER successful call — stays until call mode is deactivated
+            if (calledTr) calledTr.classList.add('crm-call-highlight');
         } catch (err) {
             App.toast(`Call failed: ${err.message}`, 'error');
         }

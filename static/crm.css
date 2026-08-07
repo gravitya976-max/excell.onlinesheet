@@ -6,10 +6,10 @@
 .spreadsheet tr.crm-call-highlight td,
 .spreadsheet tr.crm-call-highlight:nth-child(even) td,
 .spreadsheet tr.crm-call-highlight:hover td {
-    background: #dbeafe !important;
+    background: #ede9fe !important;
 }
 .spreadsheet tr.crm-call-highlight {
-    box-shadow: inset 4px 0 0 #3b82f6;
+    box-shadow: inset 4px 0 0 #8b5cf6;
 }
 
 /* ── Toolbar Icons ─────────────────────────────────────────────────── */
