@@ -19,6 +19,7 @@ const Spreadsheet = (() => {
         { key: 'premium',   label: 'Premium',        editable: true,  type: 'text' },
         { key: 'mobileno',  label: 'Mobile No',      editable: true,  type: 'text' },
         { key: 'status',    label: 'Status',          editable: true,  type: 'status' },
+        { key: 'due_months', label: 'Due Months',      editable: true,  type: 'text' },
     ];
 
     const EXTRA_COL_COUNT = 10;
@@ -41,6 +42,7 @@ const Spreadsheet = (() => {
     const STORAGE_KEY_ROW = 'os_row_heights';
     const DEFAULT_WIDTHS = { sn: 45, policyno: 130, name: 180, doc: 100, fup: 100, sumass: 110, plan: 120, mode: 80, premium: 100, mobileno: 120, status: 120 };
     for (let i = 1; i <= EXTRA_COL_COUNT; i++) DEFAULT_WIDTHS[`note${i}`] = 120;
+    DEFAULT_WIDTHS['due_months'] = 140;
 
     let colWidths = { ...DEFAULT_WIDTHS };
     let headerNames = {};

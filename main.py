@@ -228,6 +228,7 @@ def init_db():
             note4 TEXT DEFAULT '', note5 TEXT DEFAULT '', note6 TEXT DEFAULT '',
             note7 TEXT DEFAULT '', note8 TEXT DEFAULT '', note9 TEXT DEFAULT '',
             note10 TEXT DEFAULT '',
+            due_months TEXT DEFAULT '',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(list_id, policyno)
         )""")
@@ -240,7 +241,7 @@ def init_db():
         )""")
         # Migrate: add note columns if missing
         existing_cols = {r["name"] for r in conn.execute("PRAGMA table_info(monthly_entries)").fetchall()}
-        for nc in NOTE_COLS:
+        for nc in NOTE_COLS + ["due_months"]:
             if nc not in existing_cols:
                 conn.execute(f"ALTER TABLE monthly_entries ADD COLUMN {nc} TEXT DEFAULT ''")
     db_push()
@@ -334,8 +335,7 @@ def upsert_master(records):
     inserted, updated = 0, 0
     non_pno = [f for f in FIELDS if f != "policyno"]
 
-    conn = get_db()
-    try:
+    with get_db() as conn:
         # 1) Fetch ALL existing master records in one query
         all_existing = conn.execute("SELECT * FROM master_policies").fetchall()
         existing_map = {r["policyno"]: r for r in all_existing}
@@ -388,8 +388,6 @@ def upsert_master(records):
             else:
                 for sql, params in batch_stmts:
                     conn.execute(sql, params)
-    finally:
-        conn.close()
 
     return inserted, updated
 
@@ -870,7 +868,7 @@ async def create_monthly_entry(year: int, month: int, request: Request):
             raise HTTPException(409, f"Policy {pno} already exists in this month's list.")
 
         # Insert into monthly_entries
-        entry_fields = master_fields + NOTE_COLS
+        entry_fields = master_fields + NOTE_COLS + ["due_months"]
         vals = {f: body.get(f, "") for f in entry_fields}
         vals["policyno"] = pno
         vals["list_id"] = list_id
@@ -925,7 +923,7 @@ async def update_entry(entry_id: int, request: Request):
         body.pop(k, None)
 
     master_fields = ["name", "doc", "fup", "sumass", "plan", "mode", "premium", "mobileno", "status"]
-    allowed = master_fields + NOTE_COLS  # note1-note10 saved monthly only
+    allowed = master_fields + NOTE_COLS + ["due_months"]  # note1-note10 + due_months saved monthly only
     updates, params = [], []
     for f in allowed:
         if f in body:

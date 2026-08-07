@@ -42,8 +42,42 @@ const CRM = (() => {
     let _suppressNextClick = false;   // prevent click handler after drag-select
 
     function init() {
-        // Mode buttons
-        $('#crm-sms-btn')?.addEventListener('click', () => toggleMode('sms'));
+        // Mode buttons — SMS flyout options replace direct click
+        // Direct click on sms-btn now just toggles flyout visibility (handled by CSS hover + click fallback)
+        $('#crm-sms-btn')?.addEventListener('click', (e) => {
+            // If already in sms or sms-custom mode, clicking the icon deactivates
+            if (mode === 'sms' || mode === 'sms-custom') {
+                toggleMode(null);
+                return;
+            }
+            // Otherwise, let the flyout handle it (CSS :hover shows flyout)
+            const flyout = $('#crm-sms-flyout');
+            if (flyout) flyout.classList.toggle('force-show');
+        });
+
+        // Flyout option clicks
+        document.querySelectorAll('.crm-flyout-opt').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const smsMode = btn.dataset.smsMode; // 'normal' or 'custom'
+                const flyout = $('#crm-sms-flyout');
+                if (flyout) flyout.classList.remove('force-show');
+                if (smsMode === 'normal') {
+                    toggleMode('sms');
+                } else if (smsMode === 'custom') {
+                    toggleMode('sms-custom');
+                }
+            });
+        });
+
+        // Close flyout on click outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#crm-sms-wrapper')) {
+                const flyout = $('#crm-sms-flyout');
+                if (flyout) flyout.classList.remove('force-show');
+            }
+        });
+
         $('#crm-call-btn')?.addEventListener('click', () => toggleMode('call'));
         $('#crm-queue-btn')?.addEventListener('click', () => toggleQueue());
 
@@ -80,7 +114,7 @@ const CRM = (() => {
         // ── Hook into virtual scroller: sync crm-selected on freshly rendered rows ──
         if (typeof VirtualScroller !== 'undefined' && VirtualScroller.onRowRendered) {
             VirtualScroller.onRowRendered((tr) => {
-                if (mode !== 'sms') {
+                if (mode !== 'sms' && mode !== 'sms-custom') {
                     tr.classList.remove('crm-selected');
                     return;
                 }
@@ -187,7 +221,7 @@ const CRM = (() => {
         const statusRaw = (entry.status || '').trim().toLowerCase();
         const statusLabel = (statusRaw === 'autodebit' || statusRaw === 'auto debit')
             ? 'Auto Debit' : 'Due';
-        return {
+        const contact = {
             policy_no: pno,
             name: entry.name || '',
             mobile,
@@ -197,6 +231,12 @@ const CRM = (() => {
             status: statusLabel,
             rowEl: null, // no DOM ref needed
         };
+        // Enrich with extra fields for custom mode
+        if (mode === 'sms-custom') {
+            contact.due_months = entry.due_months || '';
+            contact.mode = entry.mode || '';
+        }
+        return contact;
     }
 
     /**
@@ -223,7 +263,7 @@ const CRM = (() => {
     // ── Event handlers ──────────────────────────────────────────────
 
     function onDragStart(e) {
-        if (mode !== 'sms' || isSending) return;
+        if (mode !== 'sms' && mode !== 'sms-custom' || isSending) return;
         if (App.state.activeTab !== 'list') return;
         if (e.button !== 0) return;
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON') return;
@@ -639,7 +679,7 @@ const CRM = (() => {
             if (queueRefreshTimer) { clearInterval(queueRefreshTimer); queueRefreshTimer = null; }
         }
 
-        if (mode === newMode) {
+        if (mode === newMode || newMode === null) {
             mode = null;
         } else {
             mode = newMode;
@@ -667,7 +707,7 @@ const CRM = (() => {
         // Remove all active states + close badges
         [smsBtn, callBtn, queueBtn].forEach(btn => {
             if (!btn) return;
-            btn.classList.remove('active-sms', 'active-call', 'active-queue');
+            btn.classList.remove('active-sms', 'active-custom', 'active-call', 'active-queue');
             const oldX = btn.querySelector('.crm-close-x');
             if (oldX) oldX.remove();
         });
@@ -686,13 +726,18 @@ const CRM = (() => {
         };
 
         if (mode === 'sms') { smsBtn?.classList.add('active-sms'); addCloseBadge(smsBtn); }
+        if (mode === 'sms-custom') { smsBtn?.classList.add('active-sms', 'active-custom'); addCloseBadge(smsBtn); }
         if (mode === 'call') { callBtn?.classList.add('active-call'); addCloseBadge(callBtn); }
         if (queueOpen) { queueBtn?.classList.add('active-queue'); addCloseBadge(queueBtn); }
 
         // Toggle body class to suppress spreadsheet row highlight during SMS mode
-        document.body.classList.toggle('crm-sms-active', mode === 'sms');
+        document.body.classList.toggle('crm-sms-active', mode === 'sms' || mode === 'sms-custom');
 
-        if (mode !== 'sms' && !queueOpen) {
+        // Toggle wrapper class to hide flyout when mode is active
+        const wrapper = $('#crm-sms-wrapper');
+        if (wrapper) wrapper.classList.toggle('mode-active', mode === 'sms' || mode === 'sms-custom');
+
+        if (mode !== 'sms' && mode !== 'sms-custom' && !queueOpen) {
             $('#crm-float-box')?.classList.remove('visible');
         }
     }
@@ -723,7 +768,7 @@ const CRM = (() => {
         }
         if (!entry) return;
 
-        if (mode === 'sms') {
+        if (mode === 'sms' || mode === 'sms-custom') {
             handleSmsRowClick(tr, entry);
         } else if (mode === 'call') {
             handleCallRowClick(entry);
@@ -749,6 +794,8 @@ const CRM = (() => {
             fup: getText('fup'),
             doc: getText('doc'),
             status: getText('status'),
+            due_months: getText('due_months'),
+            mode: getText('mode'),
         };
     }
 
@@ -784,6 +831,9 @@ const CRM = (() => {
                 doc: entry.doc || '',
                 status: statusLabel,
                 rowEl: tr,
+                // Extra fields for custom mode
+                due_months: entry.due_months || '',
+                mode: entry.mode || entry.mobileno_mode || '',
             });
             tr.classList.add('crm-selected');
         }
@@ -862,7 +912,7 @@ const CRM = (() => {
                 sendBtn = $('#crm-send-btn');
             }
             // Always (re-)attach listener — innerHTML replacement strips old listeners
-            sendBtn.onclick = showConfirmation;
+            sendBtn.onclick = mode === 'sms-custom' ? showCustomConfirmation : showConfirmation;
         }
     }
 
@@ -934,6 +984,486 @@ const CRM = (() => {
                 renderFloatBox(); // Go back to selection view
             });
             $('#crm-confirm-yes')?.addEventListener('click', doSendSMS);
+        }
+    }
+
+    // ── Custom SMS Confirmation + Template Chooser ────────────────────
+    function showCustomConfirmation() {
+        if (selectedContacts.length === 0) return;
+
+        const list = $('#crm-float-list');
+        const footer = $('#crm-float-footer');
+        const header = $('#crm-float-count');
+
+        const count = selectedContacts.length;
+        if (header) header.textContent = 'Confirm Send';
+
+        if (list) {
+            list.innerHTML = `
+                <div class="crm-confirm-view">
+                    <div class="crm-confirm-icon">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#5b6abf" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                    </div>
+                    <div class="crm-confirm-text">
+                        Send Custom SMS to <strong>${count}</strong> contact${count > 1 ? 's' : ''}?
+                    </div>
+                    <div class="crm-confirm-sub">
+                        Choose a template on next step
+                    </div>
+                </div>
+            `;
+        }
+
+        if (footer) {
+            footer.innerHTML = `
+                <div class="crm-confirm-actions">
+                    <button id="crm-custom-cancel" class="crm-confirm-cancel">Cancel</button>
+                    <button id="crm-custom-yes" class="crm-confirm-send">Choose Template</button>
+                </div>
+            `;
+            $('#crm-custom-cancel')?.addEventListener('click', () => renderFloatBox());
+            $('#crm-custom-yes')?.addEventListener('click', showTemplateChooser);
+        }
+    }
+
+    function showTemplateChooser() {
+        const list = $('#crm-float-list');
+        const footer = $('#crm-float-footer');
+        const header = $('#crm-float-count');
+
+        if (header) header.textContent = 'Choose Template';
+
+        if (list) {
+            list.innerHTML = `
+                <div class="crm-template-chooser">
+                    <div class="crm-template-card" data-template="overdue">
+                        <div class="crm-template-icon">📋</div>
+                        <div class="crm-template-info">
+                            <div class="crm-template-title">Overdue</div>
+                            <div class="crm-template-desc">Auto-generated from Due Months column. Calculates month names from mode.</div>
+                        </div>
+                    </div>
+                    <div class="crm-template-card" data-template="custom">
+                        <div class="crm-template-icon">✏️</div>
+                        <div class="crm-template-info">
+                            <div class="crm-template-title">Blank (Custom)</div>
+                            <div class="crm-template-desc">Write your own message with tags like {Name}, {POL-NUM}.</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            list.querySelector('[data-template="overdue"]')?.addEventListener('click', showOverduePreview);
+            list.querySelector('[data-template="custom"]')?.addEventListener('click', showBlankEditor);
+        }
+
+        if (footer) {
+            footer.innerHTML = `
+                <div class="crm-confirm-actions">
+                    <button id="crm-tpl-back" class="crm-confirm-cancel">Back</button>
+                </div>
+            `;
+            $('#crm-tpl-back')?.addEventListener('click', showCustomConfirmation);
+        }
+    }
+
+    // ── Overdue Preview ──────────────────────────────────────────────
+    async function showOverduePreview() {
+        const list = $('#crm-float-list');
+        const footer = $('#crm-float-footer');
+        const header = $('#crm-float-count');
+
+        if (header) header.textContent = 'Overdue Preview';
+
+        // Show loading
+        if (list) {
+            list.innerHTML = '<div style="text-align:center;padding:30px;color:#8b92a5;font-size:12px">Generating preview...</div>';
+        }
+        if (footer) footer.innerHTML = '';
+
+        // Fetch previews from backend
+        try {
+            const payload = {
+                contacts: selectedContacts.map(c => ({
+                    policy_no: c.policy_no,
+                    name: c.name,
+                    mobile: c.mobile,
+                    premium: c.premium,
+                    fup: c.fup,
+                    mode: c.mode,
+                    due_months: c.due_months,
+                }))
+            };
+            const data = await App.api('POST', '/api/sms/preview-overdue', payload);
+            const previews = data.previews || [];
+
+            if (!list) return;
+
+            const frag = document.createDocumentFragment();
+
+            // Count valid / error
+            const valid = previews.filter(p => p.message);
+            const errors = previews.filter(p => p.error);
+
+            // Stats
+            const stats = document.createElement('div');
+            stats.className = 'crm-queue-stats';
+            stats.style.marginBottom = '8px';
+            stats.innerHTML = `
+                <div class="crm-stat"><span class="crm-stat-num crm-stat-done">${valid.length}</span><span class="crm-stat-label">Ready</span></div>
+                <div class="crm-stat"><span class="crm-stat-num crm-stat-fail">${errors.length}</span><span class="crm-stat-label">Skipped</span></div>
+                <div class="crm-stat"><span class="crm-stat-num">${selectedContacts.length}</span><span class="crm-stat-label">Total</span></div>
+            `;
+            frag.appendChild(stats);
+
+            // Preview cards
+            previews.forEach(p => {
+                const card = document.createElement('div');
+                card.className = 'crm-preview-card';
+
+                if (p.error) {
+                    card.innerHTML = `
+                        <div class="crm-preview-card-header">
+                            <span class="crm-preview-card-name">${esc(p.name || p.policy_no)}</span>
+                            <span class="crm-badge-failed">skip</span>
+                        </div>
+                        <div class="crm-preview-error">${esc(p.error)}</div>
+                    `;
+                } else {
+                    card.innerHTML = `
+                        <div class="crm-preview-card-header">
+                            <span class="crm-preview-card-name">${esc(p.name || p.policy_no)}</span>
+                            <span class="crm-preview-card-chars ${p.chars > 160 ? 'over-limit' : ''}">${p.chars} chars</span>
+                        </div>
+                        <div class="crm-preview-bubble">${esc(p.message)}</div>
+                    `;
+                }
+                frag.appendChild(card);
+            });
+
+            list.innerHTML = '';
+            list.appendChild(frag);
+
+            // Footer with Back + Send
+            if (footer) {
+                footer.innerHTML = `
+                    <div class="crm-confirm-actions">
+                        <button id="crm-od-back" class="crm-confirm-cancel">Back</button>
+                        <button id="crm-od-send" class="crm-confirm-send" ${valid.length === 0 ? 'disabled' : ''}>
+                            Send ${valid.length} SMS
+                        </button>
+                    </div>
+                `;
+                $('#crm-od-back')?.addEventListener('click', showTemplateChooser);
+                $('#crm-od-send')?.addEventListener('click', () => doSendCustomSMS('overdue'));
+            }
+        } catch (err) {
+            if (list) list.innerHTML = `<div style="text-align:center;padding:20px;color:#ef4444;font-size:12px">Preview failed: ${esc(err.message || err)}</div>`;
+        }
+    }
+
+    function showBlankEditor() {
+        const list = $('#crm-float-list');
+        const footer = $('#crm-float-footer');
+        const header = $('#crm-float-count');
+
+        if (header) header.textContent = 'Write SMS';
+
+        // Get the last selected contact for live preview
+        const previewContact = selectedContacts.length > 0
+            ? selectedContacts[selectedContacts.length - 1]
+            : null;
+
+        if (list) {
+            list.innerHTML = `
+                <div class="crm-blank-editor">
+                    <textarea id="crm-custom-msg" class="crm-custom-textarea" rows="5"
+                        placeholder="Type your message here..."></textarea>
+                    <div class="crm-char-counter"><span id="crm-char-count">0</span> / 160 chars</div>
+                    <div class="crm-tag-hints">
+                        <span class="crm-tag-label">Tags:</span>
+                        <button class="crm-tag-btn" data-tag="{Name}">{Name}</button>
+                        <button class="crm-tag-btn" data-tag="{POL-NUM}">{POL-NUM}</button>
+                        <button class="crm-tag-btn" data-tag="{Premium}">{Premium}</button>
+                        <button class="crm-tag-btn" data-tag="{FUP}">{FUP}</button>
+                        <button class="crm-tag-btn" data-tag="{Mode}">{Mode}</button>
+                    </div>
+                    <div class="crm-live-preview" id="crm-live-preview">
+                        <div class="crm-preview-label">📱 Preview${previewContact ? ' — ' + esc(previewContact.name || previewContact.policy_no) : ''}</div>
+                        <div class="crm-preview-bubble" id="crm-preview-bubble">
+                            <span class="crm-preview-placeholder">Start typing to see preview...</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const textarea = $('#crm-custom-msg');
+            const counter = $('#crm-char-count');
+            const bubble = $('#crm-preview-bubble');
+
+            /** Replace tags with real contact data for preview */
+            function renderPreview(text) {
+                if (!text.trim()) {
+                    bubble.innerHTML = '<span class="crm-preview-placeholder">Start typing to see preview...</span>';
+                    return;
+                }
+                if (!previewContact) {
+                    bubble.textContent = text;
+                    return;
+                }
+                let preview = text
+                    .replace(/\{Name\}/gi, previewContact.name || '—')
+                    .replace(/\{POL-NUM\}/gi, previewContact.policy_no || '—')
+                    .replace(/\{Premium\}/gi, previewContact.premium || '—')
+                    .replace(/\{FUP\}/gi, previewContact.fup || '—')
+                    .replace(/\{Mode\}/gi, previewContact.mode || '—');
+                bubble.textContent = preview;
+            }
+
+            // ── Tag Autocomplete ─────────────────────────────────────
+            const TAG_DEFS = [
+                { tag: '{Name}',    desc: 'Holder name' },
+                { tag: '{POL-NUM}', desc: 'Policy number' },
+                { tag: '{Premium}', desc: 'Premium amt' },
+                { tag: '{FUP}',     desc: 'FUP date' },
+                { tag: '{Mode}',    desc: 'Payment mode' },
+            ];
+            // Normalized lookup for fuzzy match on close-brace
+            const TAG_NORM = {};
+            TAG_DEFS.forEach(t => { TAG_NORM[t.tag.replace(/[{}]/g, '').toLowerCase().replace(/[\s\-_]/g, '')] = t.tag; });
+
+            let acDropdown = null;
+            let acActiveIdx = -1;
+            let acBracePos = -1;  // cursor position of the opening `{`
+
+            function createDropdown() {
+                if (acDropdown) return;
+                acDropdown = document.createElement('div');
+                acDropdown.className = 'crm-autocomplete';
+                // Position relative to the editor container
+                const editor = list.querySelector('.crm-blank-editor');
+                if (editor) {
+                    editor.style.position = 'relative';
+                    editor.appendChild(acDropdown);
+                }
+            }
+
+            function showAC(filter) {
+                createDropdown();
+                const q = filter.toLowerCase().replace(/[\s\-_]/g, '');
+                const matches = TAG_DEFS.filter(t => {
+                    const norm = t.tag.replace(/[{}]/g, '').toLowerCase().replace(/[\s\-_]/g, '');
+                    return norm.includes(q) || q.includes(norm.substring(0, Math.max(1, q.length)));
+                });
+                if (matches.length === 0) { hideAC(); return; }
+
+                acDropdown.innerHTML = matches.map((m, i) =>
+                    `<div class="crm-ac-item${i === 0 ? ' active' : ''}" data-idx="${i}" data-tag="${m.tag}">
+                        <span class="crm-ac-tag">${m.tag}</span>
+                        <span class="crm-ac-desc">${m.desc}</span>
+                    </div>`
+                ).join('');
+                acActiveIdx = 0;
+
+                // Position below textarea
+                const taRect = textarea.getBoundingClientRect();
+                const editorRect = textarea.closest('.crm-blank-editor').getBoundingClientRect();
+                acDropdown.style.top = (taRect.bottom - editorRect.top + 4) + 'px';
+                acDropdown.style.left = '0px';
+                acDropdown.classList.add('visible');
+
+                // Click handlers on items
+                acDropdown.querySelectorAll('.crm-ac-item').forEach(item => {
+                    item.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        insertACTag(item.dataset.tag);
+                    });
+                });
+            }
+
+            function hideAC() {
+                if (acDropdown) acDropdown.classList.remove('visible');
+                acActiveIdx = -1;
+                acBracePos = -1;
+            }
+
+            function insertACTag(tag) {
+                if (acBracePos < 0) { hideAC(); return; }
+                const cursor = textarea.selectionStart;
+                const before = textarea.value.slice(0, acBracePos);
+                const after = textarea.value.slice(cursor);
+                textarea.value = before + tag + after;
+                textarea.selectionStart = textarea.selectionEnd = acBracePos + tag.length;
+                hideAC();
+                textarea.focus();
+                textarea.dispatchEvent(new Event('input'));
+            }
+
+            /** Fuzzy-match: normalize what the user typed and find the closest tag */
+            function fuzzyMatchTag(raw) {
+                const norm = raw.toLowerCase().replace(/[\s\-_]/g, '');
+                // Exact normalized match
+                if (TAG_NORM[norm]) return TAG_NORM[norm];
+                // Partial match: find best
+                let best = null, bestScore = 0;
+                for (const [key, tag] of Object.entries(TAG_NORM)) {
+                    // Check if key starts with what user typed or vice versa
+                    if (key.startsWith(norm) || norm.startsWith(key)) {
+                        const score = Math.min(key.length, norm.length) / Math.max(key.length, norm.length);
+                        if (score > bestScore && score > 0.4) { best = tag; bestScore = score; }
+                    }
+                }
+                return best;
+            }
+
+            textarea?.addEventListener('input', () => {
+                const len = textarea.value.length;
+                counter.textContent = len;
+                counter.closest('.crm-char-counter')?.classList.toggle('over-limit', len > 160);
+                renderPreview(textarea.value);
+
+                // Autocomplete: detect `{...` being typed
+                const cursor = textarea.selectionStart;
+                const text = textarea.value;
+                // Find the last unclosed `{` before cursor
+                const beforeCursor = text.slice(0, cursor);
+                const lastOpen = beforeCursor.lastIndexOf('{');
+                const lastClose = beforeCursor.lastIndexOf('}');
+
+                if (lastOpen > lastClose) {
+                    // We're inside an unclosed `{`
+                    acBracePos = lastOpen;
+                    const partial = beforeCursor.slice(lastOpen + 1);
+                    showAC(partial);
+                } else {
+                    hideAC();
+                }
+
+                // Auto-correct on closing brace: check if user just typed `}`
+                if (cursor > 0 && text[cursor - 1] === '}') {
+                    // Find matching `{`
+                    const segment = text.slice(0, cursor);
+                    const openIdx = segment.lastIndexOf('{', cursor - 2);
+                    if (openIdx >= 0) {
+                        const raw = text.slice(openIdx + 1, cursor - 1); // content between { and }
+                        const matched = fuzzyMatchTag(raw);
+                        if (matched && matched !== '{' + raw + '}') {
+                            // Replace the wrong tag with the correct one
+                            textarea.value = text.slice(0, openIdx) + matched + text.slice(cursor);
+                            textarea.selectionStart = textarea.selectionEnd = openIdx + matched.length;
+                            textarea.dispatchEvent(new Event('input'));
+                        }
+                        hideAC();
+                    }
+                }
+            });
+
+            textarea?.addEventListener('keydown', (e) => {
+                if (!acDropdown || !acDropdown.classList.contains('visible')) return;
+                const items = acDropdown.querySelectorAll('.crm-ac-item');
+                if (items.length === 0) return;
+
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    acActiveIdx = (acActiveIdx + 1) % items.length;
+                    items.forEach((it, i) => it.classList.toggle('active', i === acActiveIdx));
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    acActiveIdx = (acActiveIdx - 1 + items.length) % items.length;
+                    items.forEach((it, i) => it.classList.toggle('active', i === acActiveIdx));
+                } else if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault();
+                    const active = items[acActiveIdx];
+                    if (active) insertACTag(active.dataset.tag);
+                } else if (e.key === 'Escape') {
+                    hideAC();
+                }
+            });
+
+            textarea?.addEventListener('blur', () => setTimeout(hideAC, 150));
+
+            // Tag buttons: insert tag at cursor
+            list.querySelectorAll('.crm-tag-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const tag = btn.dataset.tag;
+                    if (!textarea) return;
+                    const start = textarea.selectionStart;
+                    const end = textarea.selectionEnd;
+                    textarea.value = textarea.value.slice(0, start) + tag + textarea.value.slice(end);
+                    textarea.selectionStart = textarea.selectionEnd = start + tag.length;
+                    textarea.focus();
+                    textarea.dispatchEvent(new Event('input'));
+                });
+            });
+
+            textarea?.focus();
+        }
+
+        if (footer) {
+            footer.innerHTML = `
+                <div class="crm-confirm-actions">
+                    <button id="crm-blank-back" class="crm-confirm-cancel">Back</button>
+                    <button id="crm-blank-send" class="crm-confirm-send">Send SMS</button>
+                </div>
+            `;
+            $('#crm-blank-back')?.addEventListener('click', showTemplateChooser);
+            $('#crm-blank-send')?.addEventListener('click', () => {
+                const msg = ($('#crm-custom-msg')?.value || '').trim();
+                if (!msg) {
+                    App.toast('Please write a message', 'error', 2000);
+                    return;
+                }
+                doSendCustomSMS('custom', msg);
+            });
+        }
+    }
+
+    // ── Send Custom SMS ──────────────────────────────────────────────
+    async function doSendCustomSMS(templateType, customMessage) {
+        if (selectedContacts.length === 0 || isSending) return;
+
+        // For overdue, validate that at least some contacts have due_months
+        if (templateType === 'overdue') {
+            const withDue = selectedContacts.filter(c => c.due_months && c.due_months.trim());
+            if (withDue.length === 0) {
+                App.toast('No contacts have Due Months filled', 'error', 3000);
+                return;
+            }
+        }
+
+        isSending = true;
+
+        try {
+            const payload = {
+                template_type: templateType,
+                custom_message: customMessage || '',
+                contacts: selectedContacts.map(c => ({
+                    policy_no: c.policy_no,
+                    name: c.name,
+                    mobile: c.mobile,
+                    premium: c.premium,
+                    fup: c.fup,
+                    doc: c.doc,
+                    status: c.status,
+                    due_months: c.due_months || '',
+                    mode: c.mode || '',
+                }))
+            };
+
+            const res = await App.api('POST', '/api/sms/send-custom', payload);
+
+            let msg = `${res.queued} SMS queued`;
+            if (res.skipped && res.skipped.length > 0) {
+                msg += ` (${res.skipped.length} skipped — missing due months data)`;
+            }
+            App.toast(msg, 'success', 4000);
+
+            showProgressView();
+            pollTimer = setInterval(pollProgress, 5000);
+        } catch (err) {
+            App.toast(`Send failed: ${err.message}`, 'error');
+            isSending = false;
+            renderFloatBox();
         }
     }
 

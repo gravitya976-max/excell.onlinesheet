@@ -3,7 +3,7 @@ CRM Routes — SMS & Call communication features for blue-pen.
 Separate database (crm.db / Turso) from master/monthly data.
 """
 
-import os, json, sqlite3, logging
+import os, json, re, sqlite3, logging
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Request, Header
 from fastapi.responses import JSONResponse
@@ -95,18 +95,21 @@ def init_crm_db():
 
 
 # GSM 7-bit only (no Unicode like ₹ — that triggers UCS-2 = 70 chars/segment).
-# Each template stays under 306 chars → 2 SMS segments (160+146).
+# Rs. with commas (Rs.12,340) is detected by most phones as currency.
+# +91 XXXXXXXXXX with space makes phone numbers tappable.
+# Keep each template under 160 chars with typical data (1 SMS segment).
+# Use simple language — no jargon (ASAP, sufficient, etc).
 
 TEMPLATE_DUE = (
-    "Dear {name}, Rs.{premium} due for Policy No. {policy_no}, "
-    "not paid for {fup_month}. Pay ASAP to avoid late penalty. "
-    "Help: +91{help_phone1}, +91{help_phone2}"
+    "Dear {name}, Rs.{premium} due for Policy {policy_no}, "
+    "not paid for {fup_month}. Please pay now to avoid penalty. "
+    "Call +91 {help_phone1}"
 )
 
 TEMPLATE_AUTODEBIT = (
-    "Dear {name}, Rs.{premium} for Policy No. {policy_no} ({fup_month}) "
-    "will be auto debited on {debit_date}. Maintain sufficient balance "
-    "to avoid late penalty. Help: +91{help_phone1}, +91{help_phone2}"
+    "Dear {name}, Rs.{premium} for Policy {policy_no} ({fup_month}) "
+    "auto debit on {debit_date}. Keep balance ready. "
+    "Call +91 {help_phone1}, +91 {help_phone2}"
 )
 
 MONTH_NAMES = [
@@ -142,6 +145,26 @@ def get_debit_date(doc: str, fup: str) -> str:
     return f"{debit_day}{ordinal} {month_name} {fup_year}"
 
 
+def _format_indian_amount(val: str) -> str:
+    """Format amount with Indian-style commas: 1,23,456"""
+    try:
+        n = int(str(val).replace(",", "").strip())
+        s = str(n)
+        if len(s) > 3:
+            last3 = s[-3:]
+            rest = s[:-3]
+            parts = []
+            while len(rest) > 2:
+                parts.insert(0, rest[-2:])
+                rest = rest[:-2]
+            if rest:
+                parts.insert(0, rest)
+            return ",".join(parts) + "," + last3
+        return s
+    except (ValueError, TypeError):
+        return str(val)
+
+
 def render_sms(contact: dict) -> str:
     """Render SMS template based on contact status."""
     status = (contact.get("status") or "").strip().lower()
@@ -151,7 +174,7 @@ def render_sms(contact: dict) -> str:
 
     base = {
         "name": contact.get("name", ""),
-        "premium": contact.get("premium", ""),
+        "premium": _format_indian_amount(contact.get("premium", "")),
         "policy_no": contact.get("policy_no", ""),
         "fup_month": fup_month,
         "help_phone1": HELP_PHONE1,
@@ -204,7 +227,182 @@ async def sms_send(request: Request):
     return {"ok": True, "queued": inserted, "batch_id": batch_id}
 
 
-# ── SMS Queue (Android polls) ──────────────────────────────────────────────────
+# ── Custom SMS — Overdue + Blank Templates ──────────────────────────────────────
+
+# Mode → step in months (how many calendar months between payment periods)
+MODE_STEP = {
+    "mly": 1, "monthly": 1,
+    "qly": 3, "quarterly": 3,
+    "hly": 6, "half yearly": 6, "half-yearly": 6,
+    "yly": 12, "yearly": 12,
+}
+
+MONTH_ABBR = [
+    "", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+]
+
+
+def parse_due_months(text: str):
+    """Parse freeform text like '4 months 12340 rs' → (count, amount).
+    Handles: '4 months 12340 rupees', '4 month 12340 rs', '3 months 5000 rupeess'
+    Returns (None, None) if unparseable.
+    """
+    if not text or not text.strip():
+        return None, None
+    t = text.strip().lower()
+    # Extract the number before 'month'
+    m_count = re.search(r'(\d+)\s*months?', t)
+    # Extract the number that's NOT the month count (the amount)
+    m_amount = re.search(r'(\d+)\s*(?:rupee|rs|rupes)', t)
+    if not m_amount:
+        # fallback: second number in the string
+        nums = re.findall(r'\d+', t)
+        if len(nums) >= 2:
+            m_amount_val = int(nums[1])
+        else:
+            m_amount_val = None
+    else:
+        m_amount_val = int(m_amount.group(1))
+
+    count = int(m_count.group(1)) if m_count else None
+    return count, m_amount_val
+
+
+def calc_overdue_months(mode_str: str, count: int):
+    """Calculate which months are due working backwards from current month.
+    Returns list of (month_number, year) tuples, oldest first.
+    """
+    step = MODE_STEP.get((mode_str or "").strip().lower(), 1)
+    now = datetime.now(_IST)
+    cur_m, cur_y = now.month, now.year
+    result = []
+    for i in range(count):
+        m = cur_m - (i * step)
+        y = cur_y
+        while m <= 0:
+            m += 12
+            y -= 1
+        result.append((m, y))
+    result.reverse()  # oldest first
+    return result
+
+
+def render_overdue_sms(contact: dict) -> str:
+    """Build overdue SMS from contact data + due_months field."""
+    due_text = contact.get("due_months", "")
+    count, amount = parse_due_months(due_text)
+    if count is None or amount is None:
+        return None  # can't render without both
+
+    mode = contact.get("mode", "MLY")
+    months = calc_overdue_months(mode, count)
+
+    if count <= 4:
+        months_text = ", ".join(f"{MONTH_ABBR[m]}'{str(y)[-2:]}" for m, y in months)
+    else:
+        months_text = f"{count} months"
+
+    name = contact.get("name", "")
+    pno = contact.get("policy_no", "")
+
+    amt_str = _format_indian_amount(amount)
+
+    # Build SMS — simple language, under 160 chars
+    msg = (
+        f"Dear {name}, Policy {pno} "
+        f"{months_text} not paid. "
+        f"Rs.{amt_str} + late fee due. "
+        f"Please pay now. Call +91 {HELP_PHONE1}"
+    )
+    return msg
+
+
+def render_blank_sms(contact: dict, template: str) -> str:
+    """Replace tags in user-written template with contact values."""
+    replacements = {
+        "{Name}": contact.get("name", ""),
+        "{POL-NUM}": contact.get("policy_no", ""),
+        "{Premium}": contact.get("premium", ""),
+        "{FUP}": contact.get("fup", ""),
+        "{Mobile}": contact.get("mobile", ""),
+        "{Mode}": contact.get("mode", ""),
+    }
+    msg = template
+    for tag, val in replacements.items():
+        msg = msg.replace(tag, val)
+    return msg
+
+
+@router.post("/api/sms/preview-overdue")
+async def sms_preview_overdue(request: Request):
+    """Preview overdue SMS — renders messages for each contact without queuing.
+    Returns array of {policy_no, name, message} or {policy_no, name, error}."""
+    body = await request.json()
+    contacts = body.get("contacts", [])
+    if not contacts:
+        raise HTTPException(400, "No contacts provided")
+
+    previews = []
+    for c in contacts:
+        pno = c.get("policy_no", "?")
+        name = c.get("name", "")
+        message = render_overdue_sms(c)
+        if message is None:
+            previews.append({"policy_no": pno, "name": name, "error": "Missing/invalid due_months"})
+        else:
+            previews.append({"policy_no": pno, "name": name, "message": message, "chars": len(message)})
+    return {"previews": previews}
+
+
+@router.post("/api/sms/send-custom")
+async def sms_send_custom(request: Request):
+    """Send custom SMS — overdue template or blank user-written template.
+    Completely separate from the normal SMS send flow.
+    """
+    body = await request.json()
+    template_type = body.get("template_type", "")  # "overdue" or "custom"
+    custom_message = body.get("custom_message", "")
+    contacts = body.get("contacts", [])
+
+    if not contacts:
+        raise HTTPException(400, "No contacts provided")
+    if template_type not in ("overdue", "custom"):
+        raise HTTPException(400, "template_type must be 'overdue' or 'custom'")
+    if template_type == "custom" and not custom_message.strip():
+        raise HTTPException(400, "custom_message is required for custom template")
+
+    batch_id = "C" + datetime.now().strftime("%Y%m%d%H%M%S")
+    inserted = 0
+    skipped = []
+
+    with get_crm_db() as conn:
+        for c in contacts:
+            mobile = (c.get("mobile") or "").strip()
+            if not mobile:
+                continue
+
+            if template_type == "overdue":
+                message = render_overdue_sms(c)
+                if message is None:
+                    skipped.append(c.get("policy_no", "?"))
+                    continue
+            else:
+                message = render_blank_sms(c, custom_message)
+
+            conn.execute(
+                "INSERT INTO sms_queue (policy_no, name, mobile, message, batch_id) VALUES (?,?,?,?,?)",
+                (c.get("policy_no", ""), c.get("name", ""), mobile, message, batch_id)
+            )
+            inserted += 1
+
+    result = {"ok": True, "queued": inserted, "batch_id": batch_id}
+    if skipped:
+        result["skipped"] = skipped
+        result["skipped_reason"] = "Missing or invalid due_months data"
+    return result
+
+
 
 @router.get("/api/sms/queue")
 async def sms_queue_poll(x_gateway_key: Optional[str] = Header(None)):

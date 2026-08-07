@@ -21,7 +21,8 @@ const DataStore = (() => {
 
     const STORAGE_KEY = 'os_datastore_v2';
     const MONTHLY_ONLY_FIELDS = new Set(['note1','note2','note3','note4','note5',
-                                          'note6','note7','note8','note9','note10']);
+                                          'note6','note7','note8','note9','note10',
+                                          'due_months']);
 
     // ── Policies index for O(1) lookup ───────────────────────────────
     let _policyIndex = {};  // { policyno: index_in_policies }

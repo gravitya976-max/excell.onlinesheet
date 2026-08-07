@@ -410,17 +410,19 @@ const App = (() => {
         const fd = new FormData();
         for (const f of fileList) fd.append('files', f);
         try {
-            const res = await api('POST', '/api/upload');
-            // Actually we need FormData upload, not JSON
             const resp = await fetch('/api/upload', { method: 'POST', body: fd });
-            if (!resp.ok) throw new Error(await resp.text());
+            if (!resp.ok) {
+                let errText = '';
+                try { const j = await resp.json(); errText = j.detail || j.message || resp.statusText; } catch { errText = await resp.text().catch(() => resp.statusText); }
+                throw new Error(errText);
+            }
             const data = await resp.json();
             toast(`Uploaded: ${data.total_inserted} new, ${data.total_updated} updated`, 'success');
             closeUpload();
             // Reload master data in DataStore
             await refreshBulkData();
             renderCurrentView();
-        } catch (e) { toast(`Upload failed: ${e.message}`, 'error'); }
+        } catch (e) { toast(`Upload failed: ${e.message || e}`, 'error'); }
         hideLoading();
     }
 
