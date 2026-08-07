@@ -604,16 +604,21 @@ async def calls_queue_report(job_id: int, request: Request, x_gateway_key: Optio
 # ── Gateway Heartbeat ──────────────────────────────────────────────────────────
 
 @router.post("/api/gateway/ping")
-async def gateway_ping(x_gateway_key: Optional[str] = Header(None)):
+@router.get("/api/gateway/ping")
+async def gateway_ping(
+    x_gateway_key: Optional[str] = Header(None),
+    key: Optional[str] = None,  # Allow ?key= query param for browser testing
+):
     """Android posts every 30s to signal it's alive."""
-    verify_gateway_key(x_gateway_key)
+    effective_key = x_gateway_key or key
+    verify_gateway_key(effective_key)
 
     now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     with get_crm_db() as conn:
         conn.execute("UPDATE gateway_heartbeat SET last_seen = ? WHERE id = 1", (now_utc,))
     log.info(f"Gateway ping received, last_seen={now_utc}")
 
-    return {"ok": True}
+    return {"ok": True, "last_seen": now_utc}
 
 
 @router.get("/api/gateway/status")
