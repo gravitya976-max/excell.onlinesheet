@@ -3,13 +3,13 @@
    ══════════════════════════════════════════════════════════════════════ */
 
 /* ── Call Mode Row Highlight ──────────────────────────────────────── */
-.crm-call-highlight {
-    background: #eff6ff !important;
-    box-shadow: inset 3px 0 0 #3b82f6;
-    position: relative;
+.spreadsheet tr.crm-call-highlight td,
+.spreadsheet tr.crm-call-highlight:nth-child(even) td,
+.spreadsheet tr.crm-call-highlight:hover td {
+    background: #dbeafe !important;
 }
-.crm-call-highlight td {
-    background: transparent !important;
+.spreadsheet tr.crm-call-highlight {
+    box-shadow: inset 4px 0 0 #3b82f6;
 }
 
 /* ── Toolbar Icons ─────────────────────────────────────────────────── */
