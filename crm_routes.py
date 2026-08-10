@@ -310,10 +310,10 @@ def render_overdue_sms(contact: dict) -> str:
 
     amt_str = _format_indian_amount(amount)
 
-    # Build SMS — simple language, under 160 chars
+    # Build SMS — simple language, clear labels for policy and month count, under 160 chars
     msg = (
-        f"Dear {name}, Policy {pno} "
-        f"{months_text} not paid. "
+        f"Dear {name}, Policy No: {pno} | "
+        f"Overdue: {months_text} not paid. "
         f"Rs.{amt_str} + late fee due. "
         f"Please pay now. Call +91 {HELP_PHONE1}"
     )
