@@ -49,6 +49,22 @@ const Spreadsheet = (() => {
     let rowHeights = {};
     let _colEls = {};
 
+    // Collapsible columns
+    const STORAGE_KEY_COLLAPSE = 'os_collapsed_cols';
+    let _collapsedCols = new Set();
+    function loadCollapsedCols() { try { const s = localStorage.getItem(STORAGE_KEY_COLLAPSE); if (s) _collapsedCols = new Set(JSON.parse(s)); } catch {} }
+    function saveCollapsedCols() { try { localStorage.setItem(STORAGE_KEY_COLLAPSE, JSON.stringify([..._collapsedCols])); } catch {} }
+
+    // Row color presets
+    const ROW_COLORS = {
+        rose:    '#f5d5d5',
+        teal:    '#d5ebe7',
+        lilac:   '#e2d9f0',
+        sand:    '#ede5d8',
+        slate:   '#d9e2ea',
+        blush:   '#ecd8df',
+    };
+    let _activeColorKey = null; // null or one of ROW_COLORS keys
     function loadColWidths()   { try { const s = localStorage.getItem(STORAGE_KEY_COL); if (s) colWidths   = { ...DEFAULT_WIDTHS, ...JSON.parse(s) }; } catch {} }
     function saveColWidths()   { try { localStorage.setItem(STORAGE_KEY_COL, JSON.stringify(colWidths));   } catch {} }
     function loadHeaderNames() { try { const s = localStorage.getItem(STORAGE_KEY_HDR); if (s) headerNames = JSON.parse(s); } catch {} }
@@ -220,12 +236,17 @@ const Spreadsheet = (() => {
         const colgroup = document.createElement('colgroup');
         activeCols.forEach(col => {
             const colEl = document.createElement('col');
-            colEl.style.width = colWidths[col.key] + 'px';
+            if (_collapsedCols.has(col.key)) {
+                colEl.style.width = '20px';
+                colEl.classList.add('col-collapsed');
+            } else {
+                colEl.style.width = colWidths[col.key] + 'px';
+            }
             _colEls[col.key] = colEl;
             colgroup.appendChild(colEl);
         });
         table.prepend(colgroup);
-        table.style.width = activeCols.reduce((s, c) => s + (colWidths[c.key] || 100), 0) + 'px';
+        table.style.width = activeCols.reduce((s, c) => s + (_collapsedCols.has(c.key) ? 20 : (colWidths[c.key] || 100)), 0) + 'px';
     }
 
     /* ── Header ──────────────────────────────────────────────────────── */
@@ -235,17 +256,53 @@ const Spreadsheet = (() => {
         getActiveCols().forEach(col => {
             const th = document.createElement('th');
             th.className = `col-${col.key}`;
-            const labelSpan = document.createElement('span');
-            labelSpan.className = 'header-label';
-            labelSpan.textContent = getHeaderLabel(col);
-            th.appendChild(labelSpan);
-            th.addEventListener('dblclick', (e) => { e.stopPropagation(); startHeaderEdit(th, col, labelSpan); });
-            const handle = document.createElement('div');
-            handle.className = 'col-resize-handle';
-            handle.addEventListener('mousedown', (e) => startColResize(e, col.key));
-            th.appendChild(handle);
+            th.style.position = 'relative';
+            const isCollapsed = _collapsedCols.has(col.key);
+
+            if (isCollapsed) {
+                th.classList.add('col-collapsed-header');
+                const expandBtn = document.createElement('button');
+                expandBtn.type = 'button';
+                expandBtn.className = 'col-collapse-btn';
+                expandBtn.textContent = '›';
+                expandBtn.title = `Expand ${getHeaderLabel(col)}`;
+                expandBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleColCollapse(col.key); });
+                th.appendChild(expandBtn);
+            } else {
+                const labelSpan = document.createElement('span');
+                labelSpan.className = 'header-label';
+                labelSpan.textContent = getHeaderLabel(col);
+                th.appendChild(labelSpan);
+                th.addEventListener('dblclick', (e) => { e.stopPropagation(); startHeaderEdit(th, col, labelSpan); });
+                const handle = document.createElement('div');
+                handle.className = 'col-resize-handle';
+                handle.addEventListener('mousedown', (e) => startColResize(e, col.key));
+                th.appendChild(handle);
+
+                // Collapse button (hidden until hover)
+                const collapseBtn = document.createElement('button');
+                collapseBtn.type = 'button';
+                collapseBtn.className = 'col-collapse-btn';
+                collapseBtn.textContent = '‹';
+                collapseBtn.title = `Collapse ${getHeaderLabel(col)}`;
+                collapseBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleColCollapse(col.key); });
+                th.appendChild(collapseBtn);
+            }
+
             headerRow.appendChild(th);
         });
+    }
+
+    function toggleColCollapse(key) {
+        if (_collapsedCols.has(key)) {
+            _collapsedCols.delete(key);
+        } else {
+            _collapsedCols.add(key);
+        }
+        saveCollapsedCols();
+        buildColgroup();
+        renderHeader();
+        VirtualScroller.refreshAllRows();
     }
 
     function startHeaderEdit(th, col, labelSpan) {
@@ -347,11 +404,29 @@ const Spreadsheet = (() => {
         if ((entry.status || '').toLowerCase() === 'notinforce') {
             tr.classList.add('nif-row');
         }
+        // Row color — apply inline background
+        const rowColor = entry.row_color || '';
+        if (rowColor && ROW_COLORS[rowColor]) {
+            tr.style.backgroundColor = ROW_COLORS[rowColor];
+            tr.dataset.rowColor = rowColor;
+        }
 
         const activeCols = getActiveCols();
         activeCols.forEach(col => {
             const td = document.createElement('td');
             td.className = `col-${col.key}`;
+
+            // Collapsed column — render thin empty cell
+            if (_collapsedCols.has(col.key)) {
+                td.classList.add('col-collapsed-cell');
+                tr.appendChild(td);
+                return;
+            }
+
+            // Apply row color to each td (for status cells that have !important bg)
+            if (rowColor && ROW_COLORS[rowColor] && col.type !== 'status') {
+                td.style.backgroundColor = ROW_COLORS[rowColor];
+            }
 
             if (col.type === 'index') {
                 td.classList.add('locked', 'sn-delete');
@@ -371,15 +446,33 @@ const Spreadsheet = (() => {
                 td.classList.add('locked', 'policyno-selectable');
                 td.dataset.field = col.key;
                 td.dataset.entryId = entryId;
+                td.style.position = 'relative';
                 const span = document.createElement('span');
                 span.className = 'cell-content';
                 highlightText(span, entry.policyno || '');
                 td.appendChild(span);
 
+                // Pencil edit button on right side — master tab only
+                if (isMaster) {
+                    const editBtn = document.createElement('button');
+                    editBtn.type = 'button';
+                    editBtn.className = 'master-edit-btn';
+                    editBtn.title = 'Edit entry';
+                    editBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>';
+                    editBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        if (typeof App !== 'undefined' && App.openEditMaster) {
+                            App.openEditMaster(entry);
+                        }
+                    });
+                    td.appendChild(editBtn);
+                }
+
             } else {
                 td.classList.add('editable');
                 td.dataset.field = col.key;
                 td.dataset.entryId = entryId;
+                td.style.position = 'relative';
                 const value = entry[col.key] || '';
                 const span = document.createElement('span');
                 span.className = 'cell-content';
@@ -387,10 +480,63 @@ const Spreadsheet = (() => {
                     const displayVal = STATUS_LABELS[value] || value || 'Due';
                     highlightText(span, displayVal);
                     addStatusClass(td, value);
+
+                    // Star note indicator — show gold star if entry has star_note
+                    if (entry.star_note) {
+                        const star = document.createElement('div');
+                        star.className = 'star-indicator';
+                        star.innerHTML = '<svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+                        star.addEventListener('mouseenter', (e) => showStarTooltip(e, entry));
+                        star.addEventListener('mouseleave', hideStarTooltip);
+                        star.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            if (typeof App !== 'undefined' && App.showStarNoteDetail) {
+                                App.showStarNoteDetail(entry);
+                            }
+                        });
+                        td.appendChild(star);
+                    }
                 } else {
                     highlightText(span, value);
                 }
                 td.appendChild(span);
+
+                // Color paint dot — on EVERY editable cell (visible on td:hover in color mode)
+                const dot = document.createElement('div');
+                dot.className = 'row-color-dot';
+                if (_activeColorKey === '__clear__') {
+                    dot.style.backgroundColor = '#fff';
+                    dot.style.border = '1px dashed #94a3b8';
+                } else if (_activeColorKey && ROW_COLORS[_activeColorKey]) {
+                    dot.style.backgroundColor = ROW_COLORS[_activeColorKey];
+                }
+                dot.addEventListener('click', (e) => {
+                    if (!_activeColorKey) return; // no color mode — don't intercept
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const oldColor = entry.row_color || '';
+                    const newColor = (_activeColorKey === '__clear__') ? '' :
+                        (oldColor === _activeColorKey) ? '' : _activeColorKey;
+                    applyRowColor(tr, entry, entryId, newColor, oldColor);
+                });
+                td.appendChild(dot);
+
+                // Phone call icon on mobileno column (visible only in CRM call mode via CSS)
+                if (col.key === 'mobileno' && value) {
+                    const callBtn = document.createElement('button');
+                    callBtn.type = 'button';
+                    callBtn.className = 'crm-call-icon';
+                    callBtn.title = 'Call';
+                    callBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>';
+                    callBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        if (typeof CRM !== 'undefined' && CRM.triggerCall) {
+                            CRM.triggerCall(entry);
+                        }
+                    });
+                    td.appendChild(callBtn);
+                }
             }
             tr.appendChild(td);
         });
@@ -438,13 +584,89 @@ const Spreadsheet = (() => {
         return tr;
     }
 
+    /* ── Row Color helpers ────────────────────────────────────────────── */
+    function applyRowColor(tr, entry, entryId, newColor, oldColor) {
+        entry.row_color = newColor;
+
+        // Update visual immediately
+        const bg = (newColor && ROW_COLORS[newColor]) ? ROW_COLORS[newColor] : '';
+        tr.style.backgroundColor = bg;
+        if (bg) {
+            tr.dataset.rowColor = newColor;
+        } else {
+            delete tr.dataset.rowColor;
+        }
+        tr.querySelectorAll('td').forEach(td => { td.style.backgroundColor = bg; });
+
+        // Persist — use App.updateEntry directly (avoids saveCell's DOM dependency)
+        if (App.state.activeTab === 'master') {
+            App.updateMasterEntry(entryId, 'row_color', newColor);
+        } else {
+            App.updateEntry(entryId, 'row_color', newColor);
+        }
+
+        // Undo support
+        pushUndo(entryId, 'row_color', oldColor, newColor);
+    }
+
+    function setActiveColorKey(key) {
+        _activeColorKey = key || null;
+        // Refresh visible rows to update dot colors
+        VirtualScroller.refreshAllRows();
+    }
+
+    /* ── Star tooltip ────────────────────────────────────────────────── */
+    let _starTooltipEl = null;
+
+    function showStarTooltip(e, entry) {
+        hideStarTooltip();
+        const rect = e.target.getBoundingClientRect();
+        const tip = document.createElement('div');
+        tip.className = 'star-tooltip';
+
+        // Find which note is starred
+        const noteKey = entry._starNoteKey || findStarNoteKey(entry);
+        tip.setAttribute('data-note-key', noteKey || 'Star Note');
+        tip.textContent = entry.star_note;
+
+        document.body.appendChild(tip);
+
+        // Position
+        const tipRect = tip.getBoundingClientRect();
+        let left = rect.left - tipRect.width - 8;
+        if (left < 8) left = rect.right + 8;
+        let top = rect.top - tipRect.height / 2 + rect.height / 2;
+        if (top < 8) top = 8;
+
+        tip.style.left = left + 'px';
+        tip.style.top = top + 'px';
+        _starTooltipEl = tip;
+    }
+
+    function hideStarTooltip() {
+        if (_starTooltipEl) {
+            _starTooltipEl.remove();
+            _starTooltipEl = null;
+        }
+    }
+
+    function findStarNoteKey(entry) {
+        // Check which note field matches star_note content
+        for (let i = 1; i <= EXTRA_COL_COUNT; i++) {
+            if (entry[`note${i}`] && entry[`note${i}`] === entry.star_note) {
+                return `Note ${i}`;
+            }
+        }
+        return 'Star Note';
+    }
+
     /* ════════════════════════════════════════════════════════════════════
        RENDER — The main entry point. Uses VirtualScroller.
        ════════════════════════════════════════════════════════════════════ */
     let _vsInitialized = false;
 
     function render(entries) {
-        loadColWidths(); loadHeaderNames(); loadRowHeights();
+        loadColWidths(); loadHeaderNames(); loadRowHeights(); loadCollapsedCols();
         buildColgroup(); renderHeader();
 
         // Deselect navigation
@@ -480,7 +702,18 @@ const Spreadsheet = (() => {
     /** Lightweight re-split: moves NIF entries to bottom section */
     function resortEntries() {
         if (typeof App !== 'undefined' && App.state.activeTab !== 'list') return;
-        const entries = App.getEntries();
+        let entries = App.getEntries();
+
+        // Respect active search filter — don't replace filtered results with full dataset
+        const filterText = (typeof App !== 'undefined' && App.getFilterText) ? App.getFilterText() : '';
+        if (filterText) {
+            entries = entries.filter(entry =>
+                Object.values(entry).some(v =>
+                    v != null && String(v).toLowerCase().includes(filterText)
+                )
+            );
+        }
+
         const nifEntries = entries.filter(e => (e.status || '').toLowerCase() === 'notinforce');
         _currentEntries = entries.filter(e => (e.status || '').toLowerCase() !== 'notinforce');
         VirtualScroller.setAllData(_currentEntries, nifEntries);
@@ -1298,5 +1531,8 @@ const Spreadsheet = (() => {
         copyPolicyNo,
         // Status change callback for real-time stat updates
         onStatusChange: (fn) => { _onStatusChangeCallback = fn; },
+        // Row coloring
+        setActiveColorKey,
+        ROW_COLORS,
     };
 })();

@@ -15,7 +15,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=86">
+    <link rel="stylesheet" href="/static/style.css?v=103">
     <link rel="stylesheet" href="/static/crm.css?v=86">
 </head>
 
@@ -33,7 +33,7 @@
                 </svg>
                 <div>
                     <div class="brand-name">Online Sheet</div>
-                    <div class="brand-version">Version 3.4.6</div>
+                    <div class="brand-version">Version 3.6.0</div>
                 </div>
             </div>
             <nav class="tabs desktop-only">
@@ -163,6 +163,24 @@
             <button id="search-clear" class="search-clear hidden" title="Clear">&times;</button>
         </div>
 
+        <!-- Row Color Picker -->
+        <div class="toolbar-colors" id="toolbar-colors">
+            <button class="color-swatch" data-color="rose" style="background:#f5d5d5" title="Rose"></button>
+            <button class="color-swatch" data-color="teal" style="background:#d5ebe7" title="Teal"></button>
+            <button class="color-swatch" data-color="lilac" style="background:#e2d9f0" title="Lilac"></button>
+            <button class="color-swatch" data-color="sand" style="background:#ede5d8" title="Sand"></button>
+            <button class="color-swatch" data-color="slate" style="background:#d9e2ea" title="Slate"></button>
+            <button class="color-swatch" data-color="blush" style="background:#ecd8df" title="Blush"></button>
+            <button class="color-swatch color-swatch-clear" data-color="__clear__" title="Reset row color (white = remove color)"></button>
+        </div>
+
+        <!-- Star Note Toggle -->
+        <button id="btn-star-note" class="toolbar-star-btn" type="button" title="Star note mode">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            </svg>
+        </button>
+
         <div class="gateway" id="crm-gateway-dot">
             <div class="crm-sms-wrapper" id="crm-sms-wrapper">
                 <button id="crm-sms-btn" class="gateway-btn crm-mode-btn" type="button" title="SMS Mode">
@@ -175,11 +193,18 @@
                 </button>
                 <div class="crm-sms-flyout" id="crm-sms-flyout">
                     <button class="crm-flyout-opt" data-sms-mode="normal" title="Standard Due/AutoDebit SMS">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16"
+                            height="16">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                        </svg>
                         Normal
                     </button>
                     <button class="crm-flyout-opt" data-sms-mode="custom" title="Overdue / Custom SMS">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16"
+                            height="16">
+                            <path d="M12 20h9" />
+                            <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                        </svg>
                         Custom
                     </button>
                 </div>
@@ -289,6 +314,66 @@
         <p id="loading-text">Processing...</p>
     </div>
 
+    <!-- Edit Master Entry Modal -->
+    <div id="edit-master-overlay" class="modal-overlay hidden">
+        <div class="modal modal-edit-master" role="dialog" aria-label="Edit Master Entry">
+            <div class="modal-header">
+                <h2>Edit Master Entry</h2>
+                <button id="btn-close-edit-master" class="icon-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body edit-master-body">
+                <input type="hidden" id="edit-master-id" />
+                <div class="edit-master-grid">
+                    <div class="edit-field">
+                        <label for="edit-master-policyno">Policy No</label>
+                        <input type="text" id="edit-master-policyno" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="edit-master-name">Name</label>
+                        <input type="text" id="edit-master-name" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="edit-master-doc">DOC</label>
+                        <input type="text" id="edit-master-doc" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="edit-master-fup">FUP</label>
+                        <input type="text" id="edit-master-fup" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="edit-master-sumass">Sum Assured</label>
+                        <input type="text" id="edit-master-sumass" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="edit-master-plan">Plan</label>
+                        <input type="text" id="edit-master-plan" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="edit-master-mode">Mode</label>
+                        <input type="text" id="edit-master-mode" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="edit-master-premium">Premium</label>
+                        <input type="text" id="edit-master-premium" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="edit-master-mobileno">Mobile No</label>
+                        <input type="text" id="edit-master-mobileno" autocomplete="off" spellcheck="false" />
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button id="btn-edit-master-cancel" class="btn btn-secondary">Cancel</button>
+                    <button id="btn-edit-master-save" class="btn btn-primary">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Mobile Undo/Redo FAB -->
     <div id="mobile-undo-redo" class="mobile-undo-redo mobile-only">
         <button id="btn-mobile-undo" class="fab-mini" type="button" title="Undo">↩</button>
@@ -298,13 +383,14 @@
     <!-- Toast Container -->
     <div id="toast-container"></div>
 
-    <script src="/static/datastore.js?v=86"></script>
-    <script src="/static/virtual-scroller.js?v=86"></script>
+    <script src="/static/datastore.js?v=87"></script>
+    <script src="/static/virtual-scroller.js?v=95"></script>
     <script src="/static/offline-queue.js?v=86"></script>
-    <script src="/static/app.js?v=86"></script>
-    <script src="/static/undo-manager.js?v=86"></script>
-    <script src="/static/spreadsheet.js?v=86"></script>
-    <script src="/static/crm.js?v=86"></script>
+    <script src="/static/app.js?v=100"></script>
+    <script src="/static/undo-manager.js?v=95"></script>
+    <script src="/static/spreadsheet.js?v=98"></script>
+    <script src="/static/crm.js?v=98"></script>
+    <script src="/static/notifications.js?v=4"></script>
 
     <!-- CRM: Floating Selection Box -->
     <div id="crm-float-box" class="crm-float-box">

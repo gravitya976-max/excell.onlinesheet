@@ -215,6 +215,73 @@ const App = (() => {
         if (nifEl) nifEl.textContent = nif;
     }
 
+    // ── Clickable stat pills — filter by status ──────────────────────
+    let _activeStatFilter = null; // null | 'total' | 'due' | 'paid' | 'nif'
+    const PAID_FILTER_SET = new Set(['paid', 'autodebit', 'dailycollection', 'branchpaid']);
+
+    function initStatPillClicks() {
+        const pills = {
+            total: document.querySelector('.stat-total'),
+            due:   document.querySelector('.stat-due'),
+            paid:  document.querySelector('.stat-paid'),
+            nif:   document.querySelector('.stat-nif'),
+        };
+
+        Object.entries(pills).forEach(([key, el]) => {
+            if (!el) return;
+            el.style.cursor = 'pointer';
+            el.addEventListener('click', () => {
+                if (_activeStatFilter === key) {
+                    // Toggle off — show all
+                    _activeStatFilter = null;
+                    _clearStatHighlight(pills);
+                    applyFilter($('#search-input').value);
+                    return;
+                }
+                _activeStatFilter = key;
+                _highlightStat(pills, key);
+                _filterByStatus(key);
+            });
+        });
+    }
+
+    function _highlightStat(pills, activeKey) {
+        Object.entries(pills).forEach(([key, el]) => {
+            if (!el) return;
+            if (key === activeKey) {
+                el.classList.add('stat-active');
+            } else {
+                el.classList.remove('stat-active');
+            }
+        });
+    }
+
+    function _clearStatHighlight(pills) {
+        Object.values(pills).forEach(el => {
+            if (el) el.classList.remove('stat-active');
+        });
+    }
+
+    function _filterByStatus(key) {
+        const all = getEntries();
+        let filtered;
+        if (key === 'total') {
+            filtered = all;
+        } else if (key === 'due') {
+            filtered = all.filter(e => {
+                const s = (e.status || '').trim().toLowerCase();
+                return s === '' || s === 'due' || (!PAID_FILTER_SET.has(s) && s !== 'notinforce');
+            });
+        } else if (key === 'paid') {
+            filtered = all.filter(e => PAID_FILTER_SET.has((e.status || '').trim().toLowerCase()));
+        } else if (key === 'nif') {
+            filtered = all.filter(e => (e.status || '').trim().toLowerCase() === 'notinforce');
+        } else {
+            filtered = all;
+        }
+        Spreadsheet.render(filtered);
+    }
+
     // ── Fetch individual month (fallback if not in bulk cache) ────────
     async function fetchMonthData(year, month) {
         try {
@@ -368,6 +435,16 @@ const App = (() => {
         const entry = entries.find(e => (e._monthlyId || e.id) === entryId);
         const pno = entry ? (entry.policyno || entry._masterPolicyno) : '';
 
+        // Record deletion in UndoManager (snapshot before removal)
+        if (entry && typeof UndoManager !== 'undefined' && UndoManager.recordDelete) {
+            UndoManager.recordDelete({
+                entryId: entryId,
+                entryData: entry,
+                tab: state.activeTab,
+                policyno: pno,
+            });
+        }
+
         // Remove from DataStore immediately (local-first)
         if (pno) DataStore.removeEntry(pno);
         renderCurrentView();
@@ -462,6 +539,99 @@ const App = (() => {
         } catch {}
     }
 
+    // ── Edit Master Entry (modal) ───────────────────────────────────
+    let _editMasterEntry = null;
+
+    function openEditMaster(entry) {
+        if (!entry) return;
+        _editMasterEntry = entry;
+
+        // Pre-fill the modal fields
+        document.getElementById('edit-master-id').value = entry.id;
+        document.getElementById('edit-master-policyno').value = entry.policyno || '';
+        document.getElementById('edit-master-name').value = entry.name || '';
+        document.getElementById('edit-master-doc').value = entry.doc || '';
+        document.getElementById('edit-master-fup').value = entry.fup || '';
+        document.getElementById('edit-master-sumass').value = entry.sumass || '';
+        document.getElementById('edit-master-plan').value = entry.plan || '';
+        document.getElementById('edit-master-mode').value = entry.mode || '';
+        document.getElementById('edit-master-premium').value = entry.premium || '';
+        document.getElementById('edit-master-mobileno').value = entry.mobileno || '';
+
+        // Show the modal
+        $('#edit-master-overlay').classList.remove('hidden');
+
+        // Focus policy number field
+        setTimeout(() => document.getElementById('edit-master-policyno').focus(), 100);
+    }
+
+    function closeEditMaster() {
+        $('#edit-master-overlay').classList.add('hidden');
+        _editMasterEntry = null;
+    }
+
+    function saveEditMaster() {
+        if (!_editMasterEntry) return;
+
+        const entryId = _editMasterEntry.id;
+        const oldPno = _editMasterEntry.policyno || '';
+
+        // Gather values from modal
+        const newPno = document.getElementById('edit-master-policyno').value.trim();
+        const newName = document.getElementById('edit-master-name').value.trim();
+        const newDoc = document.getElementById('edit-master-doc').value.trim();
+        const newFup = document.getElementById('edit-master-fup').value.trim();
+        const newSumass = document.getElementById('edit-master-sumass').value.trim();
+        const newPlan = document.getElementById('edit-master-plan').value.trim();
+        const newMode = document.getElementById('edit-master-mode').value.trim();
+        const newPremium = document.getElementById('edit-master-premium').value.trim();
+        const newMobileno = document.getElementById('edit-master-mobileno').value.trim();
+
+        if (!newPno) {
+            toast('Policy number cannot be empty', 'error');
+            return;
+        }
+
+        // Build the update body
+        const body = {
+            policyno: newPno,
+            name: newName,
+            doc: newDoc,
+            fup: newFup,
+            sumass: newSumass,
+            plan: newPlan,
+            mode: newMode,
+            premium: newPremium,
+            mobileno: newMobileno,
+        };
+
+        const pnoChanged = newPno !== oldPno;
+        const confirmTitle = pnoChanged ? 'Update Policy Number?' : 'Save Changes?';
+        const confirmMsg = pnoChanged
+            ? `Change policy number from ${oldPno} to ${newPno}? This will update all associated monthly entries as well.`
+            : `Save changes to policy ${oldPno}?`;
+
+        showConfirm(confirmTitle, confirmMsg, async () => {
+            closeEditMaster();
+            showLoading('Saving changes...');
+            try {
+                const resp = await api('PUT', `/api/master/${entryId}`, body);
+                let msg = `Updated: ${resp.policyno}`;
+                if (resp.policyno_changed) {
+                    msg = `Policy number changed: ${resp.old_policyno} → ${resp.policyno}`;
+                }
+                toast(msg, 'success', 4000);
+
+                // Reload data to reflect changes
+                await reloadActive();
+                await refreshBulkData();
+            } catch (e) {
+                toast(`Update failed: ${e.message}`, 'error');
+            }
+            hideLoading();
+        });
+    }
+
     // ── Init ──────────────────────────────────────────────────────────
     function init() {
         updateMonthLabel();
@@ -531,6 +701,24 @@ const App = (() => {
             });
         }
 
+        // Edit Master modal buttons
+        const editOverlay = $('#edit-master-overlay');
+        if (editOverlay) {
+            $('#btn-close-edit-master')?.addEventListener('click', closeEditMaster);
+            $('#btn-edit-master-cancel')?.addEventListener('click', closeEditMaster);
+            $('#btn-edit-master-save')?.addEventListener('click', saveEditMaster);
+            editOverlay.addEventListener('click', (e) => {
+                if (e.target === editOverlay) closeEditMaster();
+            });
+            // Enter key in any field triggers save
+            editOverlay.querySelectorAll('.edit-field input').forEach(inp => {
+                inp.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); saveEditMaster(); }
+                    if (e.key === 'Escape') closeEditMaster();
+                });
+            });
+        }
+
         // ── Initial data load strategy ──────────────────────────────
         // 1. Try localStorage cache (instant)
         // 2. Fetch current view from API
@@ -562,6 +750,15 @@ const App = (() => {
 
         // Initialize UndoManager keyboard bindings (Ctrl+Z, Ctrl+Y)
         if (typeof UndoManager !== 'undefined') UndoManager.initKeyboard();
+
+        // ── Color picker toolbar ───────────────────────────────────
+        initColorPicker();
+
+        // ── Star note button ───────────────────────────────────────
+        initStarNote();
+
+        // ── Clickable stat pills (filter by status) ───────────────
+        initStatPillClicks();
 
         // ── Online / Offline events ────────────────────────────────
         window.addEventListener('online', () => {
@@ -644,6 +841,122 @@ const App = (() => {
 
     document.addEventListener('DOMContentLoaded', init);
 
+    // ── Star/Color mode state ──────────────────────────────────────────
+    let _starNoteMode = false;
+
+    // ── Shared: turn off color mode ────────────────────────────────────
+    function deactivateColorMode() {
+        document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('active'));
+        document.body.classList.remove('color-mode-active');
+        Spreadsheet.setActiveColorKey(null);
+    }
+
+    // ── Shared: turn off star mode ─────────────────────────────────────
+    function deactivateStarMode() {
+        _starNoteMode = false;
+        const btn = $('#btn-star-note');
+        if (btn) btn.classList.remove('active');
+    }
+
+    // ── Color Picker ──────────────────────────────────────────────────
+    function initColorPicker() {
+        const allSwatches = document.querySelectorAll('.color-swatch');
+
+        allSwatches.forEach(swatch => {
+            swatch.addEventListener('click', () => {
+                const colorKey = swatch.dataset.color;
+                const wasActive = swatch.classList.contains('active');
+
+                // Turn off star mode first (mutually exclusive)
+                deactivateStarMode();
+
+                // Deactivate all swatches
+                allSwatches.forEach(s => s.classList.remove('active'));
+
+                if (wasActive && colorKey !== '__clear__') {
+                    document.body.classList.remove('color-mode-active');
+                    Spreadsheet.setActiveColorKey(null);
+                } else {
+                    swatch.classList.add('active');
+                    document.body.classList.add('color-mode-active');
+                    Spreadsheet.setActiveColorKey(colorKey || '__clear__');
+                }
+            });
+        });
+    }
+
+    // ── Star Note ─────────────────────────────────────────────────────
+    // (let _starNoteMode declared above)
+
+    function initStarNote() {
+        const btn = $('#btn-star-note');
+        if (!btn) return;
+
+        btn.addEventListener('click', () => {
+            const turningOn = !_starNoteMode;
+
+            // Turn off color mode first (mutually exclusive)
+            if (turningOn) deactivateColorMode();
+
+            _starNoteMode = turningOn;
+            btn.classList.toggle('active', _starNoteMode);
+            if (_starNoteMode) {
+                toast('Star mode ON — click any note cell to star/unstar it', 'info', 3000);
+            }
+        });
+
+        // Listen for note cell clicks when star mode is on (capture phase)
+        document.addEventListener('click', (e) => {
+            if (!_starNoteMode) return;
+            const td = e.target.closest('td.editable');
+            if (!td) return;
+            const field = td.dataset.field;
+            if (!field || !field.startsWith('note')) return;
+
+            const entryId = parseInt(td.dataset.entryId);
+            const entries = getEntries();
+            const entry = entries.find(en => (en._monthlyId || en.id) === entryId);
+            if (!entry) return;
+
+            // Only intercept now that we know it's a valid star target
+            e.stopPropagation();
+            e.preventDefault();
+
+            const noteVal = entry[field] || '';
+            if (!noteVal.trim()) {
+                toast('Note is empty — add text first', 'info', 2000);
+                return;
+            }
+
+            // Toggle star
+            const oldStar = entry.star_note || '';
+            const newStar = (oldStar === noteVal) ? '' : noteVal;
+            entry.star_note = newStar;
+
+            // Save to server
+            api('PUT', `/api/entry/${entryId}`, { star_note: newStar }).catch(() => {
+                toast('Failed to save star note', 'error');
+                entry.star_note = oldStar; // revert on failure
+            });
+
+            toast(newStar ? `Starred: ${field.replace('note', 'Note ')}` : 'Star removed',
+                  newStar ? 'success' : 'info', 2000);
+
+            // Refresh visible rows to show/hide star indicator
+            VirtualScroller.refresh();
+        }, true);
+    }
+
+    function showStarNoteDetail(entry) {
+        if (!entry.star_note) return;
+        // Find which note field is starred
+        let noteKey = 'Star Note';
+        for (let i = 1; i <= 10; i++) {
+            if (entry[`note${i}`] === entry.star_note) { noteKey = `Note ${i}`; break; }
+        }
+        toast(`${noteKey}: ${entry.star_note}`, 'info', 5000);
+    }
+
     return {
         state,
         isMobile,
@@ -657,5 +970,10 @@ const App = (() => {
         renderCurrentView,
         getEntries,
         getFilterText,
+        openEditMaster,
+        showStarNoteDetail,
+        applyFilter,
+        clearSearch,
+        updateMonthLabel,
     };
 })();

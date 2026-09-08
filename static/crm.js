@@ -111,16 +111,25 @@ const CRM = (() => {
         document.addEventListener('mousemove', onDragMove);
         document.addEventListener('mouseup', onDragEnd);
 
-        // ── Hook into virtual scroller: sync crm-selected on freshly rendered rows ──
+        // ── Hook into virtual scroller: sync crm-selected + call highlights on freshly rendered rows ──
         if (typeof VirtualScroller !== 'undefined' && VirtualScroller.onRowRendered) {
             VirtualScroller.onRowRendered((tr) => {
-                if (mode !== 'sms' && mode !== 'sms-custom') {
-                    tr.classList.remove('crm-selected');
-                    return;
-                }
                 const pno = _getPolicyFromRow(tr);
-                const isSelected = pno && selectedContacts.some(c => c.policy_no === pno);
-                tr.classList.toggle('crm-selected', isSelected);
+
+                // SMS selection highlight
+                if (mode === 'sms' || mode === 'sms-custom') {
+                    const isSelected = pno && selectedContacts.some(c => c.policy_no === pno);
+                    tr.classList.toggle('crm-selected', isSelected);
+                } else {
+                    tr.classList.remove('crm-selected');
+                }
+
+                // Call highlight — persistent across scroll
+                if (mode === 'call' && pno && _calledPolicies.has(pno)) {
+                    tr.classList.add('crm-call-highlight');
+                } else {
+                    tr.classList.remove('crm-call-highlight');
+                }
             });
         }
 
@@ -602,17 +611,22 @@ const CRM = (() => {
         }
     }
 
-    /** Build date-grouped log entries into a DocumentFragment */
+    /** Build date-grouped log entries into a DocumentFragment (newest first) */
     function _buildLogSection(frag, logs) {
-        // Group by date
+        // Group by date, preserving order from the already-sorted logs (newest first)
+        const groupOrder = [];  // [dateKey, ...] in insertion order
         const groups = {};
         logs.forEach(log => {
             const dateKey = getDateLabel(log.sent_at || log.triggered_at || '');
-            if (!groups[dateKey]) groups[dateKey] = [];
+            if (!groups[dateKey]) {
+                groups[dateKey] = [];
+                groupOrder.push(dateKey);  // First time seeing this date = newest entry for that date
+            }
             groups[dateKey].push(log);
         });
 
-        Object.entries(groups).forEach(([dateLabel, items]) => {
+        groupOrder.forEach(dateLabel => {
+            const items = groups[dateLabel];
             const header = document.createElement('div');
             header.className = 'crm-history-date';
             header.textContent = dateLabel;
@@ -734,8 +748,9 @@ const CRM = (() => {
         document.body.classList.toggle('crm-sms-active', mode === 'sms' || mode === 'sms-custom');
         document.body.classList.toggle('crm-call-active', mode === 'call');
 
-        // Clear call row highlights when leaving call mode
+        // Clear call row highlights + called tracking when leaving call mode
         if (mode !== 'call') {
+            _calledPolicies.clear();
             document.querySelectorAll('.crm-call-highlight').forEach(r => r.classList.remove('crm-call-highlight'));
         }
 
@@ -776,9 +791,8 @@ const CRM = (() => {
 
         if (mode === 'sms' || mode === 'sms-custom') {
             handleSmsRowClick(tr, entry);
-        } else if (mode === 'call') {
-            handleCallRowClick(tr, entry);
         }
+        // Call mode no longer hijacks row clicks — phone icon handles calls
     }
 
     /** Read entry fields from DOM cells as fallback */
@@ -851,6 +865,8 @@ const CRM = (() => {
     // Track which policy_nos are currently rendered in the float list
     let _renderedPolicies = new Map(); // policy_no -> DOM element
 
+    let _renderChunkRaf = null;
+
     function renderFloatBox() {
         const box = $('#crm-float-box');
         if (!box) return;
@@ -870,10 +886,8 @@ const CRM = (() => {
         const list = $('#crm-float-list');
         if (!list) return;
 
-        // Build set of current policy_nos for fast lookup
-        const currentSet = new Set(selectedContacts.map(c => c.policy_no));
-
         // Remove DOM nodes for deselected contacts
+        const currentSet = new Set(selectedContacts.map(c => c.policy_no));
         for (const [pno, el] of _renderedPolicies) {
             if (!currentSet.has(pno)) {
                 el.remove();
@@ -881,35 +895,69 @@ const CRM = (() => {
             }
         }
 
-        // Add DOM nodes for newly selected contacts (only those not already rendered)
-        selectedContacts.forEach((c) => {
-            if (_renderedPolicies.has(c.policy_no)) return; // already in DOM
+        // Only add contacts not yet in DOM — build newest-first
+        const toAdd = [...selectedContacts].reverse().filter(c => !_renderedPolicies.has(c.policy_no));
 
-            const item = document.createElement('div');
-            item.className = 'crm-float-item';
-            const badgeClass = c.status === 'Auto Debit' ? 'crm-badge-autodebit' : 'crm-badge-due';
-            item.innerHTML = `
-                <div class="crm-float-item-info">
-                    <div class="crm-float-item-name">${esc(c.name)}</div>
-                    <div class="crm-float-item-meta">
-                        ${esc(c.policy_no)} · <span class="${badgeClass}">${esc(c.status)}</span>
-                    </div>
+        if (toAdd.length === 0) {
+            // Nothing new to add — just scroll to top (newest)
+            list.scrollTop = 0;
+            _ensureSendButton();
+            return;
+        }
+
+        // Cancel any in-progress chunk render
+        if (_renderChunkRaf) {
+            cancelAnimationFrame(_renderChunkRaf);
+            _renderChunkRaf = null;
+        }
+
+        // Add first 5 immediately (feels instant)
+        const firstBatch = toAdd.splice(0, 5);
+        firstBatch.forEach(c => _appendContactItem(list, c, true));
+        list.scrollTop = 0;
+
+        // Add the rest in rAF chunks of 10
+        function addChunk() {
+            if (toAdd.length === 0) { _renderChunkRaf = null; return; }
+            const chunk = toAdd.splice(0, 10);
+            chunk.forEach(c => _appendContactItem(list, c, true));
+            _renderChunkRaf = requestAnimationFrame(addChunk);
+        }
+        if (toAdd.length > 0) {
+            _renderChunkRaf = requestAnimationFrame(addChunk);
+        }
+
+        _ensureSendButton();
+    }
+
+    /** Append a single contact item to the list. prepend=true inserts at top (newest-first). */
+    function _appendContactItem(list, c, prepend) {
+        const item = document.createElement('div');
+        item.className = 'crm-float-item';
+        const badgeClass = c.status === 'Auto Debit' ? 'crm-badge-autodebit' : 'crm-badge-due';
+        item.innerHTML = `
+            <div class="crm-float-item-info">
+                <div class="crm-float-item-name">${esc(c.name)}</div>
+                <div class="crm-float-item-meta">
+                    ${esc(c.policy_no)} · <span class="${badgeClass}">${esc(c.status)}</span>
                 </div>
-                <button class="crm-remove" title="Remove">×</button>
-            `;
-            const pno = c.policy_no;
-            item.querySelector('.crm-remove').addEventListener('click', () => {
-                const idx = selectedContacts.findIndex(sc => sc.policy_no === pno);
-                if (idx >= 0) removeContact(idx);
-            });
-            list.appendChild(item);
-            _renderedPolicies.set(c.policy_no, item);
+            </div>
+            <button class="crm-remove" title="Remove">×</button>
+        `;
+        const pno = c.policy_no;
+        item.querySelector('.crm-remove').addEventListener('click', () => {
+            const idx = selectedContacts.findIndex(sc => sc.policy_no === pno);
+            if (idx >= 0) removeContact(idx);
         });
+        if (prepend && list.firstChild) {
+            list.insertBefore(item, list.firstChild);
+        } else {
+            list.appendChild(item);
+        }
+        _renderedPolicies.set(pno, item);
+    }
 
-        // Auto-scroll to show latest selection
-        list.scrollTop = list.scrollHeight;
-
-        // Ensure footer send button exists and has listener
+    function _ensureSendButton() {
         const footer = $('#crm-float-footer');
         if (footer && !isSending) {
             let sendBtn = $('#crm-send-btn');
@@ -917,10 +965,10 @@ const CRM = (() => {
                 footer.innerHTML = '<button id="crm-send-btn" class="crm-send-btn">Send SMS</button>';
                 sendBtn = $('#crm-send-btn');
             }
-            // Always (re-)attach listener — innerHTML replacement strips old listeners
             sendBtn.onclick = mode === 'sms-custom' ? showCustomConfirmation : showConfirmation;
         }
     }
+
 
     function removeContact(idx) {
         const c = selectedContacts[idx];
@@ -939,6 +987,8 @@ const CRM = (() => {
     }
 
     function clearAll() {
+        // Cancel any in-progress progressive render
+        if (_renderChunkRaf) { cancelAnimationFrame(_renderChunkRaf); _renderChunkRaf = null; }
         // Remove crm-selected from ALL rows in the tbody (not just visible)
         const tbody = document.getElementById('spreadsheet-body');
         if (tbody) {
@@ -1597,36 +1647,120 @@ const CRM = (() => {
 
     // ── Call mode ────────────────────────────────────────────────────
     let pendingCall = null;
+    const _calledPolicies = new Set(); // Track called policies for persistent highlight
 
-    function handleCallRowClick(tr, entry) {
+    /**
+     * Trigger a call from the phone icon click.
+     * Handles multi-number (numbers separated by '/').
+     * Called by the phone icon button in spreadsheet.js.
+     */
+    function triggerCall(entry) {
+        if (mode !== 'call') return;
+
         // Block calls when gateway is offline
         if (!gatewayOnline) {
             App.toast('Gateway is offline — calls unavailable', 'error', 3000);
             return;
         }
 
-        const mobile = entry.mobileno || '';
+        const mobile = (entry.mobileno || '').trim();
         if (!mobile) {
             App.toast('No mobile number for this policy', 'error', 2000);
             return;
         }
 
-        pendingCall = {
-            policy_no: entry.policyno || '',
-            name: entry.name || '',
-            mobile: mobile,
-            _tr: tr,  // store reference for post-confirm highlight
-        };
+        const policyNo = entry.policyno || '';
+        const name = entry.name || '';
+
+        // Check for multiple numbers separated by '/'
+        const numbers = mobile.split('/').map(n => n.trim()).filter(n => n.length > 0);
+
+        if (numbers.length > 1) {
+            // Multi-number: show picker in the call modal
+            _showMultiNumberModal(policyNo, name, numbers);
+        } else {
+            // Single number: show normal confirmation
+            _showCallConfirmModal(policyNo, name, numbers[0]);
+        }
+    }
+
+    /** Show call modal for a single number */
+    function _showCallConfirmModal(policyNo, name, mobile) {
+        pendingCall = { policy_no: policyNo, name: name, mobile: mobile };
 
         const modal = $('#crm-call-modal');
-        $('#crm-call-name').textContent = pendingCall.name;
-        $('#crm-call-pno').textContent = pendingCall.policy_no;
-        $('#crm-call-mobile').textContent = pendingCall.mobile;
+        $('#crm-call-name').textContent = name;
+        $('#crm-call-pno').textContent = policyNo;
+        $('#crm-call-mobile').textContent = mobile;
+
+        // Show normal single-number layout
+        const actionsEl = modal?.querySelector('.crm-call-actions');
+        if (actionsEl) {
+            actionsEl.innerHTML = `
+                <button id="crm-call-cancel" class="crm-call-cancel">Cancel</button>
+                <button id="crm-call-do" class="crm-call-confirm">Call</button>
+            `;
+            modal.querySelector('#crm-call-cancel')?.addEventListener('click', closeCallModal);
+            modal.querySelector('#crm-call-do')?.addEventListener('click', confirmCall);
+        }
+
+        // Hide multi-number container if present
+        const numContainer = modal?.querySelector('.crm-call-numbers');
+        if (numContainer) numContainer.remove();
+
+        modal?.classList.add('visible');
+    }
+
+    /** Show call modal with multi-number picker */
+    function _showMultiNumberModal(policyNo, name, numbers) {
+        const modal = $('#crm-call-modal');
+        $('#crm-call-name').textContent = name;
+        $('#crm-call-pno').textContent = policyNo;
+        $('#crm-call-mobile').textContent = 'Multiple numbers';
+
+        // Replace actions with number picker buttons
+        const actionsEl = modal?.querySelector('.crm-call-actions');
+        if (actionsEl) {
+            actionsEl.innerHTML = `<button id="crm-call-cancel" class="crm-call-cancel">Cancel</button>`;
+            modal.querySelector('#crm-call-cancel')?.addEventListener('click', closeCallModal);
+        }
+
+        // Remove old picker if exists
+        const oldPicker = modal?.querySelector('.crm-call-numbers');
+        if (oldPicker) oldPicker.remove();
+
+        // Add number picker
+        const card = modal?.querySelector('.crm-call-card');
+        if (card) {
+            const pickerDiv = document.createElement('div');
+            pickerDiv.className = 'crm-call-numbers';
+            const phoneSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>';
+
+            numbers.forEach((num, i) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'crm-call-num-btn';
+                btn.innerHTML = `${phoneSvg} ${esc(num)}`;
+                btn.addEventListener('click', () => {
+                    pendingCall = { policy_no: policyNo, name: name, mobile: num };
+                    confirmCall();
+                });
+                pickerDiv.appendChild(btn);
+            });
+
+            // Insert before actions
+            card.insertBefore(pickerDiv, actionsEl);
+        }
+
         modal?.classList.add('visible');
     }
 
     function closeCallModal() {
-        $('#crm-call-modal')?.classList.remove('visible');
+        const modal = $('#crm-call-modal');
+        modal?.classList.remove('visible');
+        // Clean up multi-number picker
+        const picker = modal?.querySelector('.crm-call-numbers');
+        if (picker) picker.remove();
         pendingCall = null;
     }
 
@@ -1634,16 +1768,25 @@ const CRM = (() => {
         if (!pendingCall) return;
         const callData = { policy_no: pendingCall.policy_no, name: pendingCall.name, mobile: pendingCall.mobile };
         const callName = pendingCall.name;
-        const calledTr = pendingCall._tr;
+        const calledPno = pendingCall.policy_no;
         closeCallModal();
+
+        // Track this policy as called (persistent highlight) — apply immediately
+        _calledPolicies.add(calledPno);
+
+        // Apply highlight to all visible rows with this policy
+        const visibleRows = _getVisibleRows();
+        for (const row of visibleRows) {
+            if (_getPolicyFromRow(row) === calledPno) {
+                row.classList.add('crm-call-highlight');
+            }
+        }
 
         try {
             await App.api('POST', '/api/calls/trigger', callData);
             App.toast(`Calling ${callName}...`, 'success', 3000);
-            // Highlight row AFTER successful call — stays until call mode is deactivated
-            if (calledTr) calledTr.classList.add('crm-call-highlight');
         } catch (err) {
-            App.toast(`Call failed: ${err.message}`, 'error');
+            App.toast(`Call queued: ${callName} (gateway offline)`, 'info', 3000);
         }
     }
 
@@ -1740,7 +1883,7 @@ const CRM = (() => {
     }
 
     // ── Public ───────────────────────────────────────────────────────
-    return { init };
+    return { init, triggerCall };
 })();
 
 document.addEventListener('DOMContentLoaded', () => CRM.init());

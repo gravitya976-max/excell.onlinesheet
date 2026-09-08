@@ -307,5 +307,6 @@ const VirtualScroller = (() => {
         getRow, getNifRow, getNifData: () => _nifData || [],
         getRowHeight, getExtraRowCount, destroy,
         onRowRendered,
+        refreshAllRows: refresh,
     };
 })();

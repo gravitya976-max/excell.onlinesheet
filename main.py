@@ -209,6 +209,7 @@ def init_db():
             policyno TEXT UNIQUE NOT NULL,
             name TEXT, doc TEXT, fup TEXT, sumass TEXT,
             plan TEXT, mode TEXT, premium TEXT, mobileno TEXT, status TEXT,
+            star_note TEXT DEFAULT '',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )""")
         conn.execute("""CREATE TABLE IF NOT EXISTS monthly_lists (
@@ -241,9 +242,13 @@ def init_db():
         )""")
         # Migrate: add note columns if missing
         existing_cols = {r["name"] for r in conn.execute("PRAGMA table_info(monthly_entries)").fetchall()}
-        for nc in NOTE_COLS + ["due_months"]:
+        for nc in NOTE_COLS + ["due_months", "row_color", "star_note"]:
             if nc not in existing_cols:
                 conn.execute(f"ALTER TABLE monthly_entries ADD COLUMN {nc} TEXT DEFAULT ''")
+        # Migrate master: add star_note if missing
+        master_cols = {r["name"] for r in conn.execute("PRAGMA table_info(master_policies)").fetchall()}
+        if "star_note" not in master_cols:
+            conn.execute("ALTER TABLE master_policies ADD COLUMN star_note TEXT DEFAULT ''")
     db_push()
 
 init_db()
@@ -545,7 +550,7 @@ async def delete_entry(entry_id: int, table: str = Query("monthly")):
 
 @app.put("/api/master/{entry_id}")
 async def update_master_entry(entry_id: int, request: Request):
-    """Update a master policy. Cannot change policyno or id."""
+    """Update a master policy. Can now change policyno (with cascade to monthly entries)."""
     try:
         body = await request.json()
     except Exception:
@@ -553,9 +558,11 @@ async def update_master_entry(entry_id: int, request: Request):
     if not body:
         raise HTTPException(400, "Empty body.")
 
-    # Cannot change policyno, id
-    for k in ("policyno", "id", "updated_at"):
+    # Cannot change id, updated_at
+    for k in ("id", "updated_at"):
         body.pop(k, None)
+
+    new_policyno = body.pop("policyno", None)
 
     master_fields = ["name", "doc", "fup", "sumass", "plan", "mode", "premium", "mobileno", "status"]
     updates, params = [], []
@@ -563,22 +570,53 @@ async def update_master_entry(entry_id: int, request: Request):
         if f in body:
             updates.append(f"{f} = ?")
             params.append(body[f])
-    if not updates:
-        raise HTTPException(400, "No valid fields.")
-
-    updates.append("updated_at = ?")
-    params.append(datetime.now().isoformat())
-    params.append(entry_id)
 
     with get_db() as conn:
         row = conn.execute("SELECT policyno FROM master_policies WHERE id=?", (entry_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Master policy not found.")
-        policyno = row["policyno"]
+        old_policyno = row["policyno"]
+
+        # Handle policyno change
+        policyno_changed = False
+        if new_policyno and new_policyno.strip() and new_policyno.strip() != old_policyno:
+            new_policyno = new_policyno.strip()
+            # Check for duplicate
+            dup = conn.execute(
+                "SELECT id FROM master_policies WHERE policyno=? AND id!=?",
+                (new_policyno, entry_id)
+            ).fetchone()
+            if dup:
+                raise HTTPException(409, f"Policy number {new_policyno} already exists.")
+            updates.append("policyno = ?")
+            params.append(new_policyno)
+            policyno_changed = True
+
+        if not updates:
+            raise HTTPException(400, "No valid fields.")
+
+        updates.append("updated_at = ?")
+        params.append(datetime.now().isoformat())
+        params.append(entry_id)
+
         conn.execute(f"UPDATE master_policies SET {', '.join(updates)} WHERE id = ?", params)
 
+        # Cascade policyno rename to monthly_entries
+        if policyno_changed:
+            conn.execute(
+                "UPDATE monthly_entries SET policyno=?, updated_at=? WHERE policyno=?",
+                (new_policyno, datetime.now().isoformat(), old_policyno)
+            )
+
     db_push()
-    return {"message": "Updated.", "id": entry_id, "policyno": policyno}
+    final_pno = new_policyno if policyno_changed else old_policyno
+    return {
+        "message": "Updated.",
+        "id": entry_id,
+        "policyno": final_pno,
+        "old_policyno": old_policyno if policyno_changed else None,
+        "policyno_changed": policyno_changed,
+    }
 
 
 # ── Search master data (fallback when monthly has no results) ───────────────────
@@ -675,28 +713,28 @@ def generate_list_internal(target_year: int, target_month: int):
                 ).fetchone()
 
                 if existing_entry:
-                    # Update only master-synced fields (NOT status, notes)
+                    # Update only master-synced fields (NOT status, notes, row_color)
                     conn.execute(
                         """UPDATE monthly_entries 
                            SET name=?, doc=?, fup=?, sumass=?, plan=?, mode=?,
-                               premium=?, mobileno=?, fup_day=?, updated_at=?
+                               premium=?, mobileno=?, fup_day=?, star_note=?, updated_at=?
                            WHERE id=?""",
                         (e.get("name",""), e.get("doc",""), e.get("fup",""),
                          e.get("sumass",""), e.get("plan",""), e.get("mode",""),
                          e.get("premium",""), e.get("mobileno",""),
-                         e.get("fup_day",0), datetime.now().isoformat(),
+                         e.get("fup_day",0), e.get("star_note",""), datetime.now().isoformat(),
                          existing_entry["id"])
                     )
                 else:
                     # New policy — full insert
                     conn.execute(
                         """INSERT INTO monthly_entries
-                           (list_id,policyno,name,doc,fup,sumass,plan,mode,premium,mobileno,status,fup_day,updated_at)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                           (list_id,policyno,name,doc,fup,sumass,plan,mode,premium,mobileno,status,fup_day,star_note,updated_at)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (list_id, e["policyno"], e.get("name",""), e.get("doc",""),
                          e.get("fup",""), e.get("sumass",""), e.get("plan",""),
                          e.get("mode",""), e.get("premium",""), e.get("mobileno",""),
-                         e.get("status",""), e.get("fup_day",0), datetime.now().isoformat())
+                         e.get("status",""), e.get("fup_day",0), e.get("star_note",""), datetime.now().isoformat())
                     )
 
             conn.execute(
@@ -714,12 +752,12 @@ def generate_list_internal(target_year: int, target_month: int):
             for e in due_entries:
                 conn.execute(
                     """INSERT INTO monthly_entries
-                       (list_id,policyno,name,doc,fup,sumass,plan,mode,premium,mobileno,status,fup_day,updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       (list_id,policyno,name,doc,fup,sumass,plan,mode,premium,mobileno,status,fup_day,star_note,updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (list_id, e["policyno"], e.get("name",""), e.get("doc",""),
                      e.get("fup",""), e.get("sumass",""), e.get("plan",""),
                      e.get("mode",""), e.get("premium",""), e.get("mobileno",""),
-                     e.get("status",""), e.get("fup_day",0), datetime.now().isoformat())
+                     e.get("status",""), e.get("fup_day",0), e.get("star_note",""), datetime.now().isoformat())
                 )
 
     db_push()
@@ -923,7 +961,7 @@ async def update_entry(entry_id: int, request: Request):
         body.pop(k, None)
 
     master_fields = ["name", "doc", "fup", "sumass", "plan", "mode", "premium", "mobileno", "status"]
-    allowed = master_fields + NOTE_COLS + ["due_months"]  # note1-note10 + due_months saved monthly only
+    allowed = master_fields + NOTE_COLS + ["due_months", "row_color", "star_note"]  # note1-note10 + due_months + row_color + star_note
     updates, params = [], []
     for f in allowed:
         if f in body:
@@ -954,6 +992,7 @@ async def update_entry(entry_id: int, request: Request):
         # Queue edits for delayed master sync (3 min)
         # Skip status='due'/'paid'/'' — those are transient monthly states
         # Skip note columns — they are monthly-only, not synced to master
+        # Skip row_color — monthly-only, not synced to master
         for f in master_fields:
             if f not in body:
                 continue
@@ -965,5 +1004,69 @@ async def update_entry(entry_id: int, request: Request):
                 (policyno, f, val)
             )
 
+        # Star note — sync to master immediately (not queued)
+        if "star_note" in body:
+            conn.execute(
+                "UPDATE master_policies SET star_note=?, updated_at=? WHERE policyno=?",
+                (body["star_note"], datetime.now().isoformat(), policyno)
+            )
+
     db_push()
     return {"message": "Updated.", "id": entry_id, "policyno": policyno}
+
+
+# ── Notifications: previous months due summary ────────────────────────────────
+
+@app.get("/api/notifications/due-summary")
+def get_due_summary():
+    """Return due counts for previous months (last 6), excluding current month."""
+    from datetime import date
+    now = date.today()
+    cur_year, cur_month = now.year, now.month
+
+    with get_db() as conn:
+        lists = conn.execute(
+            "SELECT * FROM monthly_lists ORDER BY year DESC, month DESC"
+        ).fetchall()
+
+        result = []
+        for ml in lists:
+            y, m = ml["year"], ml["month"]
+            # Skip current month
+            if y == cur_year and m == cur_month:
+                continue
+            # Only last 6 months
+            months_ago = (cur_year - y) * 12 + (cur_month - m)
+            if months_ago > 6:
+                continue
+
+            entries = conn.execute(
+                """SELECT status FROM monthly_entries WHERE list_id=?""",
+                (ml["id"],)
+            ).fetchall()
+
+            total = len(entries)
+            due = sum(1 for e in entries if (e["status"] or "").lower() in ("", "due"))
+            paid = sum(1 for e in entries if (e["status"] or "").lower() == "paid")
+            autodebit = sum(1 for e in entries if (e["status"] or "").lower() == "autodebit")
+            nif = sum(1 for e in entries if (e["status"] or "").lower() == "notinforce")
+
+            if total == 0:
+                continue
+
+            import calendar
+            month_name = calendar.month_name[m]
+            result.append({
+                "year": y,
+                "month": m,
+                "month_name": month_name,
+                "label": f"{month_name} {y}",
+                "months_ago": months_ago,
+                "total": total,
+                "due": due,
+                "paid": paid,
+                "autodebit": autodebit,
+                "nif": nif,
+            })
+
+    return result

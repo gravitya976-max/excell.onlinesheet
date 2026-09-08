@@ -220,6 +220,38 @@ const DataStore = (() => {
     }
 
     /**
+     * Insert an entry at a specific index (for undo-delete restore).
+     * @param {string} context - 'master' or 'monthly'
+     * @param {Object} entry - the entry data
+     * @param {number} index - position to insert at
+     * @param {string} [monthKey] - e.g. "2026-7" (required for monthly)
+     */
+    function insertEntry(context, entry, index, monthKey) {
+        if (context === 'master') {
+            const pos = Math.min(index, _policies.length);
+            _policies.splice(pos, 0, entry);
+            rebuildIndex();
+        } else if (monthKey) {
+            if (!_monthlyOverlays[monthKey]) _monthlyOverlays[monthKey] = [];
+            const arr = _monthlyOverlays[monthKey];
+            const pos = Math.min(index, arr.length);
+            arr.splice(pos, 0, entry);
+
+            // Also add to master if not present
+            const idx = _policyIndex[entry.policyno];
+            if (idx === undefined) {
+                const masterEntry = { ...entry };
+                MONTHLY_ONLY_FIELDS.forEach(f => delete masterEntry[f]);
+                const s = (masterEntry.status || '').toLowerCase();
+                if (s === 'paid' || s === 'due' || s === '') delete masterEntry.status;
+                _policies.push(masterEntry);
+                rebuildIndex();
+            }
+        }
+        _notify('insert');
+    }
+
+    /**
      * Remove an entry (delete row).
      * Always removes from master + all monthly overlays.
      */
@@ -332,6 +364,7 @@ const DataStore = (() => {
         // Mutations
         updateField,
         addEntry,
+        insertEntry,
         removeEntry,
         shouldSyncToMaster,
         
