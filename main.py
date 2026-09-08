@@ -1020,9 +1020,12 @@ async def update_entry(entry_id: int, request: Request):
 @app.get("/api/notifications/due-summary")
 def get_due_summary():
     """Return due counts for previous months (last 6), excluding current month."""
+    import calendar
     from datetime import date
     now = date.today()
     cur_year, cur_month = now.year, now.month
+
+    PAID_STATUSES = {"paid", "autodebit", "dailycollection", "branchpaid"}
 
     with get_db() as conn:
         lists = conn.execute(
@@ -1046,15 +1049,21 @@ def get_due_summary():
             ).fetchall()
 
             total = len(entries)
-            due = sum(1 for e in entries if (e["status"] or "").lower() in ("", "due"))
-            paid = sum(1 for e in entries if (e["status"] or "").lower() == "paid")
-            autodebit = sum(1 for e in entries if (e["status"] or "").lower() == "autodebit")
-            nif = sum(1 for e in entries if (e["status"] or "").lower() == "notinforce")
-
             if total == 0:
                 continue
 
-            import calendar
+            nif = 0
+            paid = 0
+            due = 0
+            for e in entries:
+                s = (e["status"] or "").strip().lower()
+                if s == "notinforce":
+                    nif += 1
+                elif s in PAID_STATUSES:
+                    paid += 1
+                else:
+                    due += 1
+
             month_name = calendar.month_name[m]
             result.append({
                 "year": y,
@@ -1065,8 +1074,8 @@ def get_due_summary():
                 "total": total,
                 "due": due,
                 "paid": paid,
-                "autodebit": autodebit,
                 "nif": nif,
             })
 
     return result
+

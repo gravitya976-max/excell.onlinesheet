@@ -99,7 +99,7 @@ const Notifications = (() => {
         _bellEl.className = 'action-btn';
         _bellEl.title = 'Due alerts';
         _bellEl.style.cssText = 'padding:8px 10px;gap:0;min-width:0;';
-        _bellEl.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18" style="pointer-events:none"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>';
+        _bellEl.innerHTML = '<i class="fa-solid fa-bell" style="font-size:16px;pointer-events:none"></i>';
 
         _badgeEl = document.createElement('span');
         _badgeEl.id = 'notif-badge';
@@ -151,49 +151,117 @@ const Notifications = (() => {
             return;
         }
 
-        // Build message lines
-        const lines = _data
-            .filter(d => d.due > 0)
-            .map(d => `${d.label}: ${d.due} unpaid`)
-            .join('\n');
-
-        const msg = `Hey! ${totalDue} policy holders didn't pay in previous months. Go check them!\n\n${lines}`;
-
-        // Use a styled overlay instead of browser alert
-        _showNotifOverlay(msg, totalDue);
+        _showNotifOverlay(totalDue);
     }
 
-    function _showNotifOverlay(msg, totalDue) {
-        // Remove old one if present
+    function _showNotifOverlay(totalDue) {
         const old = document.getElementById('notif-overlay');
         if (old) old.remove();
 
         const overlay = document.createElement('div');
         overlay.id = 'notif-overlay';
-        overlay.style.cssText = 'position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;animation:np-in 0.18s ease;';
+        Object.assign(overlay.style, {
+            position: 'fixed', inset: '0', zIndex: '9500',
+            background: 'rgba(0,0,0,0.45)', display: 'flex',
+            alignItems: 'center', justifyContent: 'center',
+            fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
+        });
 
         const card = document.createElement('div');
-        card.style.cssText = 'background:#fff;border-radius:14px;padding:28px 32px;max-width:400px;width:90%;box-shadow:0 16px 48px rgba(0,0,0,0.2);text-align:center;font-family:var(--font-sans);';
+        Object.assign(card.style, {
+            background: '#fff', borderRadius: '16px',
+            maxWidth: '420px', width: '92%',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+            overflow: 'hidden',
+        });
 
-        // Bell icon at top
-        card.innerHTML = `
-            <div style="margin-bottom:16px">
-                <svg viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" width="36" height="36" style="margin:0 auto">
-                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-                    <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-                </svg>
+        // ── Header section (compact) ────────────────────────
+        const header = document.createElement('div');
+        Object.assign(header.style, {
+            background: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
+            padding: '18px 24px 16px', display: 'flex',
+            alignItems: 'center', gap: '14px', color: '#fff',
+        });
+        header.innerHTML = `
+            <i class="fa-solid fa-bell" style="font-size:20px;opacity:0.9;flex-shrink:0"></i>
+            <div style="flex:1">
+                <div style="font-size:16px;font-weight:700;letter-spacing:0.2px">Due Alert</div>
+                <div style="font-size:12px;opacity:0.8;margin-top:2px">${totalDue} unpaid from previous months</div>
             </div>
-            <div style="font-size:18px;font-weight:800;color:#0f172a;margin-bottom:8px">Due Alert</div>
-            <div style="font-size:14px;color:#475569;margin-bottom:16px;white-space:pre-line;line-height:1.6">${msg}</div>
-            <button id="notif-dismiss-btn" type="button" style="background:var(--green,#16a34a);color:#fff;border:none;border-radius:8px;padding:10px 28px;font-size:14px;font-weight:700;cursor:pointer;font-family:var(--font-sans);transition:background 0.15s;">Got it</button>
+            <div style="font-size:26px;font-weight:800;letter-spacing:-1px">${totalDue}</div>
         `;
+        card.appendChild(header);
+
+        // ── Month rows ──────────────────────────────────────
+        const body = document.createElement('div');
+        Object.assign(body.style, {
+            padding: '14px 18px 8px',
+        });
+
+        const dueMonths = _data.filter(d => d.due > 0);
+
+        dueMonths.forEach((d, i) => {
+            const row = document.createElement('div');
+            Object.assign(row.style, {
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '12px 14px', borderRadius: '10px',
+                background: i % 2 === 0 ? '#fef2f2' : '#fff',
+                marginBottom: '6px',
+                border: '1px solid ' + (i % 2 === 0 ? '#fecaca' : '#f1f5f9'),
+            });
+
+            // Left: month name + total
+            const left = document.createElement('div');
+            left.innerHTML = `
+                <div style="font-size:15px;font-weight:700;color:#0f172a;line-height:1.2">${d.month_name} ${d.year}</div>
+                <div style="font-size:11px;color:#64748b;margin-top:2px">${d.total} total policies</div>
+            `;
+
+            // Right: due count badge
+            const badge = document.createElement('div');
+            Object.assign(badge.style, {
+                background: d.due > 50 ? '#dc2626' : d.due > 20 ? '#ea580c' : '#f59e0b',
+                color: '#fff', fontWeight: '800', fontSize: '18px',
+                borderRadius: '8px', padding: '6px 14px',
+                minWidth: '48px', textAlign: 'center',
+                lineHeight: '1.2',
+            });
+            badge.innerHTML = `${d.due}<div style="font-size:9px;font-weight:600;opacity:0.85;letter-spacing:0.5px">DUE</div>`;
+
+            row.appendChild(left);
+            row.appendChild(badge);
+            body.appendChild(row);
+        });
+
+        card.appendChild(body);
+
+        // ── Footer ──────────────────────────────────────────
+        const footer = document.createElement('div');
+        Object.assign(footer.style, {
+            padding: '8px 18px 18px', textAlign: 'center',
+        });
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Got it';
+        Object.assign(btn.style, {
+            background: 'var(--green, #16a34a)', color: '#fff',
+            border: 'none', outline: 'none', borderRadius: '10px',
+            padding: '11px 36px', fontSize: '14px', fontWeight: '700',
+            cursor: 'pointer', fontFamily: 'inherit',
+            transition: 'background 0.15s, transform 0.1s',
+            width: '100%', boxShadow: 'none',
+        });
+        btn.addEventListener('mousedown', () => { btn.style.transform = 'scale(0.97)'; });
+        btn.addEventListener('mouseup', () => { btn.style.transform = ''; });
+        footer.appendChild(btn);
+        card.appendChild(footer);
 
         overlay.appendChild(card);
         document.body.appendChild(overlay);
 
         // Close handlers
         const close = () => overlay.remove();
-        document.getElementById('notif-dismiss-btn').addEventListener('click', close);
+        btn.addEventListener('click', close);
         overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
     }
 
