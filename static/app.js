@@ -611,8 +611,10 @@ const App = (() => {
             ? `Change policy number from ${oldPno} to ${newPno}? This will update all associated monthly entries as well.`
             : `Save changes to policy ${oldPno}?`;
 
+        // Close edit form first, then show confirmation
+        closeEditMaster();
+
         showConfirm(confirmTitle, confirmMsg, async () => {
-            closeEditMaster();
             showLoading('Saving changes...');
             try {
                 const resp = await api('PUT', `/api/master/${entryId}`, body);

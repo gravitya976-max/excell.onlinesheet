@@ -216,15 +216,18 @@ async def sms_send(request: Request):
 
     with get_crm_db() as conn:
         for c in contacts:
-            mobile = (c.get("mobile") or "").strip()
-            if not mobile:
+            mobile_raw = (c.get("mobile") or "").strip()
+            if not mobile_raw:
                 continue
+            # Split by '/' for dual-number entries (e.g. "9876543210/9123456789")
+            numbers = [n.strip() for n in mobile_raw.split('/') if n.strip()]
             message = render_sms(c)
-            conn.execute(
-                "INSERT INTO sms_queue (policy_no, name, mobile, message, batch_id) VALUES (?,?,?,?,?)",
-                (c.get("policy_no", ""), c.get("name", ""), mobile, message, batch_id)
-            )
-            inserted += 1
+            for num in numbers:
+                conn.execute(
+                    "INSERT INTO sms_queue (policy_no, name, mobile, message, batch_id) VALUES (?,?,?,?,?)",
+                    (c.get("policy_no", ""), c.get("name", ""), num, message, batch_id)
+                )
+                inserted += 1
 
     return {"ok": True, "queued": inserted, "batch_id": batch_id}
 
@@ -380,8 +383,8 @@ async def sms_send_custom(request: Request):
 
     with get_crm_db() as conn:
         for c in contacts:
-            mobile = (c.get("mobile") or "").strip()
-            if not mobile:
+            mobile_raw = (c.get("mobile") or "").strip()
+            if not mobile_raw:
                 continue
 
             if template_type == "overdue":
@@ -392,11 +395,14 @@ async def sms_send_custom(request: Request):
             else:
                 message = render_blank_sms(c, custom_message)
 
-            conn.execute(
-                "INSERT INTO sms_queue (policy_no, name, mobile, message, batch_id) VALUES (?,?,?,?,?)",
-                (c.get("policy_no", ""), c.get("name", ""), mobile, message, batch_id)
-            )
-            inserted += 1
+            # Split by '/' for dual-number entries
+            numbers = [n.strip() for n in mobile_raw.split('/') if n.strip()]
+            for num in numbers:
+                conn.execute(
+                    "INSERT INTO sms_queue (policy_no, name, mobile, message, batch_id) VALUES (?,?,?,?,?)",
+                    (c.get("policy_no", ""), c.get("name", ""), num, message, batch_id)
+                )
+                inserted += 1
 
     result = {"ok": True, "queued": inserted, "batch_id": batch_id}
     if skipped:
