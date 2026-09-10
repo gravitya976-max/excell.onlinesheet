@@ -968,20 +968,76 @@ const App = (() => {
             // Immediate visual feedback on the clicked note cell
             td.classList.toggle('starred-note', isStarring);
 
+            // Direct DOM update on the status cell in the same row (no full refresh)
+            const tr = td.closest('tr');
+            if (tr) {
+                const statusTd = tr.querySelector('td.col-status');
+                if (statusTd) {
+                    const existingStar = statusTd.querySelector('.star-indicator');
+                    if (starred.length > 0) {
+                        // Add or update star indicator
+                        if (existingStar) {
+                            // Update badge
+                            const badge = existingStar.querySelector('.star-badge');
+                            if (starred.length > 1) {
+                                if (badge) {
+                                    badge.textContent = starred.length;
+                                } else {
+                                    const newBadge = document.createElement('span');
+                                    newBadge.className = 'star-badge';
+                                    newBadge.textContent = starred.length;
+                                    existingStar.appendChild(newBadge);
+                                }
+                            } else if (badge) {
+                                badge.remove();
+                            }
+                            existingStar.title = starred.length + ' starred note' + (starred.length > 1 ? 's' : '');
+                        } else {
+                            // Create star indicator
+                            const star = document.createElement('div');
+                            star.className = 'star-indicator';
+                            star.title = starred.length + ' starred note' + (starred.length > 1 ? 's' : '');
+                            star.innerHTML = '<svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+                            if (starred.length > 1) {
+                                const newBadge = document.createElement('span');
+                                newBadge.className = 'star-badge';
+                                newBadge.textContent = starred.length;
+                                star.appendChild(newBadge);
+                            }
+                            star.addEventListener('mouseenter', (ev) => {
+                                if (typeof Spreadsheet !== 'undefined' && Spreadsheet.showStarTooltip) {
+                                    Spreadsheet.showStarTooltip(ev, entry);
+                                }
+                            });
+                            star.addEventListener('mouseleave', () => {
+                                if (typeof Spreadsheet !== 'undefined' && Spreadsheet.hideStarTooltip) {
+                                    Spreadsheet.hideStarTooltip();
+                                }
+                            });
+                            star.addEventListener('click', (ev) => {
+                                ev.stopPropagation();
+                                showStarNoteDetail(entry);
+                            });
+                            statusTd.appendChild(star);
+                        }
+                    } else if (existingStar) {
+                        // Remove star indicator — no more starred notes
+                        existingStar.remove();
+                    }
+                }
+            }
+
             // Save to server
             api('PUT', `/api/entry/${entryId}`, { star_note: newRaw }).catch(() => {
                 toast('Failed to save star note', 'error');
                 entry.star_note = oldRaw; // revert on failure
                 td.classList.toggle('starred-note', !isStarring); // revert visual
-                VirtualScroller.refresh();
+                VirtualScroller.refresh(); // full refresh only on error to revert
             });
 
             const noteLabel = field.replace('note', 'Note ');
             toast(isStarring ? `★ ${noteLabel} starred` : `${noteLabel} unstarred`,
                   isStarring ? 'success' : 'info', 2000);
-
-            // Refresh visible rows to show/hide star indicator on policyno
-            VirtualScroller.refresh();
         }, true);
     }
 

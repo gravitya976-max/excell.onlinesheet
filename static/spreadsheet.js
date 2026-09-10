@@ -1553,5 +1553,8 @@ const Spreadsheet = (() => {
         // Row coloring
         setActiveColorKey,
         ROW_COLORS,
+        // Star tooltip (used by App for dynamic star indicators)
+        showStarTooltip,
+        hideStarTooltip,
     };
 })();
