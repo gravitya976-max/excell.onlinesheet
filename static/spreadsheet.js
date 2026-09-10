@@ -452,6 +452,7 @@ const Spreadsheet = (() => {
                 highlightText(span, entry.policyno || '');
                 td.appendChild(span);
 
+
                 // Pencil edit button on right side — master tab only
                 if (isMaster) {
                     const editBtn = document.createElement('button');
@@ -481,11 +482,20 @@ const Spreadsheet = (() => {
                     highlightText(span, displayVal);
                     addStatusClass(td, value);
 
-                    // Star note indicator — show gold star if entry has star_note
-                    if (entry.star_note) {
+                    // Star note indicator on status column
+                    // (hidden in SMS/Call modes via CSS)
+                    const starredKeys = (typeof App !== 'undefined' && App.parseStarNote) ? App.parseStarNote(entry) : [];
+                    if (starredKeys.length > 0) {
                         const star = document.createElement('div');
                         star.className = 'star-indicator';
+                        star.title = starredKeys.length + ' starred note' + (starredKeys.length > 1 ? 's' : '');
                         star.innerHTML = '<svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+                        if (starredKeys.length > 1) {
+                            const badge = document.createElement('span');
+                            badge.className = 'star-badge';
+                            badge.textContent = starredKeys.length;
+                            star.appendChild(badge);
+                        }
                         star.addEventListener('mouseenter', (e) => showStarTooltip(e, entry));
                         star.addEventListener('mouseleave', hideStarTooltip);
                         star.addEventListener('click', (e) => {
@@ -495,6 +505,13 @@ const Spreadsheet = (() => {
                             }
                         });
                         td.appendChild(star);
+                    }
+                } else if (col.key.startsWith('note')) {
+                    // Note cells — add starred-note class if this note is starred
+                    highlightText(span, value);
+                    const noteStarredKeys = (typeof App !== 'undefined' && App.parseStarNote) ? App.parseStarNote(entry) : [];
+                    if (noteStarredKeys.includes(col.key)) {
+                        td.classList.add('starred-note');
                     }
                 } else {
                     highlightText(span, value);
@@ -620,23 +637,35 @@ const Spreadsheet = (() => {
 
     function showStarTooltip(e, entry) {
         hideStarTooltip();
-        const rect = e.target.getBoundingClientRect();
+        const rect = e.target.closest('.star-indicator').getBoundingClientRect();
         const tip = document.createElement('div');
         tip.className = 'star-tooltip';
 
-        // Find which note is starred
-        const noteKey = entry._starNoteKey || findStarNoteKey(entry);
-        tip.setAttribute('data-note-key', noteKey || 'Star Note');
-        tip.textContent = entry.star_note;
+        // Build tooltip content showing all starred notes
+        const starredKeys = (typeof App !== 'undefined' && App.parseStarNote) ? App.parseStarNote(entry) : [];
+        if (starredKeys.length === 0) {
+            tip.setAttribute('data-note-key', 'Star Note');
+            tip.textContent = '(no starred notes)';
+        } else {
+            tip.setAttribute('data-note-key', starredKeys.length + ' Starred Note' + (starredKeys.length > 1 ? 's' : ''));
+            const lines = starredKeys.map(key => {
+                const label = key.replace('note', 'Note ');
+                const text = entry[key] || '(empty)';
+                return `★ ${label}: ${text}`;
+            });
+            tip.textContent = lines.join('\n');
+            tip.style.whiteSpace = 'pre-line';
+        }
 
         document.body.appendChild(tip);
 
-        // Position
+        // Position — to the right of the star icon
         const tipRect = tip.getBoundingClientRect();
-        let left = rect.left - tipRect.width - 8;
-        if (left < 8) left = rect.right + 8;
+        let left = rect.right + 8;
+        if (left + tipRect.width > window.innerWidth - 8) left = rect.left - tipRect.width - 8;
         let top = rect.top - tipRect.height / 2 + rect.height / 2;
         if (top < 8) top = 8;
+        if (top + tipRect.height > window.innerHeight - 8) top = window.innerHeight - tipRect.height - 8;
 
         tip.style.left = left + 'px';
         tip.style.top = top + 'px';
@@ -648,16 +677,6 @@ const Spreadsheet = (() => {
             _starTooltipEl.remove();
             _starTooltipEl = null;
         }
-    }
-
-    function findStarNoteKey(entry) {
-        // Check which note field matches star_note content
-        for (let i = 1; i <= EXTRA_COL_COUNT; i++) {
-            if (entry[`note${i}`] && entry[`note${i}`] === entry.star_note) {
-                return `Note ${i}`;
-            }
-        }
-        return 'Star Note';
     }
 
     /* ════════════════════════════════════════════════════════════════════

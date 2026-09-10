@@ -890,6 +890,25 @@ const App = (() => {
     // ── Star Note ─────────────────────────────────────────────────────
     // (let _starNoteMode declared above)
 
+    // Parse star_note: returns an array of starred field keys, e.g. ["note3","note7"]
+    // Handles legacy format (plain text) by matching against note1-note10
+    function parseStarNote(entry) {
+        const raw = entry.star_note || '';
+        if (!raw) return [];
+        // Try JSON array first
+        try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) return parsed;
+        } catch (_) { /* not JSON — legacy format */ }
+        // Legacy: raw is the note text content — find which field matches
+        for (let i = 1; i <= 10; i++) {
+            if (entry[`note${i}`] && entry[`note${i}`] === raw) {
+                return [`note${i}`];
+            }
+        }
+        return []; // can't match legacy text — clear it
+    }
+
     function initStarNote() {
         const btn = $('#btn-star-note');
         if (!btn) return;
@@ -930,33 +949,52 @@ const App = (() => {
                 return;
             }
 
-            // Toggle star
-            const oldStar = entry.star_note || '';
-            const newStar = (oldStar === noteVal) ? '' : noteVal;
-            entry.star_note = newStar;
+            // Parse current starred keys
+            const oldRaw = entry.star_note || '';
+            const starred = parseStarNote(entry);
+            const idx = starred.indexOf(field);
+            const isStarring = idx === -1;
+
+            if (isStarring) {
+                starred.push(field);
+            } else {
+                starred.splice(idx, 1);
+            }
+
+            // Save as JSON array (or empty string if none)
+            const newRaw = starred.length ? JSON.stringify(starred) : '';
+            entry.star_note = newRaw;
+
+            // Immediate visual feedback on the clicked note cell
+            td.classList.toggle('starred-note', isStarring);
 
             // Save to server
-            api('PUT', `/api/entry/${entryId}`, { star_note: newStar }).catch(() => {
+            api('PUT', `/api/entry/${entryId}`, { star_note: newRaw }).catch(() => {
                 toast('Failed to save star note', 'error');
-                entry.star_note = oldStar; // revert on failure
+                entry.star_note = oldRaw; // revert on failure
+                td.classList.toggle('starred-note', !isStarring); // revert visual
+                VirtualScroller.refresh();
             });
 
-            toast(newStar ? `Starred: ${field.replace('note', 'Note ')}` : 'Star removed',
-                  newStar ? 'success' : 'info', 2000);
+            const noteLabel = field.replace('note', 'Note ');
+            toast(isStarring ? `★ ${noteLabel} starred` : `${noteLabel} unstarred`,
+                  isStarring ? 'success' : 'info', 2000);
 
-            // Refresh visible rows to show/hide star indicator
+            // Refresh visible rows to show/hide star indicator on policyno
             VirtualScroller.refresh();
         }, true);
     }
 
     function showStarNoteDetail(entry) {
-        if (!entry.star_note) return;
-        // Find which note field is starred
-        let noteKey = 'Star Note';
-        for (let i = 1; i <= 10; i++) {
-            if (entry[`note${i}`] === entry.star_note) { noteKey = `Note ${i}`; break; }
-        }
-        toast(`${noteKey}: ${entry.star_note}`, 'info', 5000);
+        const starred = parseStarNote(entry);
+        if (!starred.length) return;
+        // Show all starred notes
+        const lines = starred.map(key => {
+            const label = key.replace('note', 'Note ');
+            const text = entry[key] || '(empty)';
+            return `★ ${label}: ${text}`;
+        });
+        toast(lines.join('\n'), 'info', 5000);
     }
 
     return {
@@ -974,6 +1012,7 @@ const App = (() => {
         getFilterText,
         openEditMaster,
         showStarNoteDetail,
+        parseStarNote,
         applyFilter,
         clearSearch,
         updateMonthLabel,

@@ -2102,12 +2102,15 @@ body.color-mode-active .row-color-dot:active {
     position: absolute;
     top: 1px;
     right: 1px;
-    width: 12px;
-    height: 12px;
+    width: 14px;
+    height: 14px;
     cursor: pointer;
     z-index: 5;
-    opacity: 0.7;
+    opacity: 0.85;
     transition: opacity 0.15s, transform 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .star-indicator:hover {
@@ -2116,11 +2119,47 @@ body.color-mode-active .row-color-dot:active {
 }
 
 .star-indicator svg {
-    width: 12px;
-    height: 12px;
-    stroke: #eab308;
+    width: 13px;
+    height: 13px;
+    stroke: #d97706;
     fill: #eab308;
     stroke-width: 1.5;
+    filter: drop-shadow(0 0 2px rgba(234,179,8,0.4));
+}
+
+/* Badge for multiple starred notes */
+.star-badge {
+    position: absolute;
+    top: -4px;
+    right: -6px;
+    background: #dc2626;
+    color: #fff;
+    font-size: 8px;
+    font-weight: 700;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    pointer-events: none;
+}
+
+/* Hide star indicator in CRM SMS and Call modes */
+.crm-sms-active .star-indicator,
+.crm-call-active .star-indicator {
+    display: none !important;
+}
+
+/* Starred note cell highlight — persistent gold left border + subtle bg */
+td.starred-note {
+    border-left: 3px solid #eab308 !important;
+    background: rgba(234, 179, 8, 0.06) !important;
+}
+
+td.starred-note .cell-content {
+    padding-left: 2px;
 }
 
 /* Star note tooltip popup */
@@ -2128,26 +2167,29 @@ body.color-mode-active .row-color-dot:active {
     position: fixed;
     background: #1e293b;
     color: #f1f5f9;
-    padding: 8px 12px;
+    padding: 10px 14px;
     border-radius: 8px;
     font-size: 12px;
-    max-width: 280px;
+    max-width: 320px;
+    min-width: 140px;
     z-index: 9999;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
     pointer-events: none;
     animation: starTooltipIn 0.15s ease;
-    line-height: 1.5;
+    line-height: 1.6;
     word-break: break-word;
+    border: 1px solid rgba(234,179,8,0.2);
 }
 
 .star-tooltip::before {
     content: attr(data-note-key);
     display: block;
     font-size: 10px;
-    color: #94a3b8;
-    margin-bottom: 2px;
+    color: #eab308;
+    margin-bottom: 4px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    font-weight: 600;
 }
 
 @keyframes starTooltipIn {
