@@ -963,7 +963,12 @@ const App = (() => {
 
             // Save as JSON array (or empty string if none)
             const newRaw = starred.length ? JSON.stringify(starred) : '';
-            entry.star_note = newRaw;
+
+            // Update DataStore source data (so future getEntries() calls reflect the change)
+            const policyno = entry.policyno || entry._masterPolicyno;
+            const context = state.activeTab === 'master' ? 'master' : 'monthly';
+            const monthKey = `${state.year}-${state.month}`;
+            DataStore.updateField(context, policyno, 'star_note', newRaw, monthKey, entryId);
 
             // Immediate visual feedback on the clicked note cell
             td.classList.toggle('starred-note', isStarring);
@@ -1005,8 +1010,11 @@ const App = (() => {
                                 star.appendChild(newBadge);
                             }
                             star.addEventListener('mouseenter', (ev) => {
-                                if (typeof Spreadsheet !== 'undefined' && Spreadsheet.showStarTooltip) {
-                                    Spreadsheet.showStarTooltip(ev, entry);
+                                // Re-fetch entry for latest data
+                                const freshEntries = getEntries();
+                                const freshEntry = freshEntries.find(en => (en._monthlyId || en.id) === entryId);
+                                if (freshEntry && typeof Spreadsheet !== 'undefined' && Spreadsheet.showStarTooltip) {
+                                    Spreadsheet.showStarTooltip(ev, freshEntry);
                                 }
                             });
                             star.addEventListener('mouseleave', () => {
@@ -1016,7 +1024,9 @@ const App = (() => {
                             });
                             star.addEventListener('click', (ev) => {
                                 ev.stopPropagation();
-                                showStarNoteDetail(entry);
+                                const freshEntries = getEntries();
+                                const freshEntry = freshEntries.find(en => (en._monthlyId || en.id) === entryId);
+                                if (freshEntry) showStarNoteDetail(freshEntry);
                             });
                             statusTd.appendChild(star);
                         }
@@ -1030,9 +1040,10 @@ const App = (() => {
             // Save to server
             api('PUT', `/api/entry/${entryId}`, { star_note: newRaw }).catch(() => {
                 toast('Failed to save star note', 'error');
-                entry.star_note = oldRaw; // revert on failure
-                td.classList.toggle('starred-note', !isStarring); // revert visual
-                VirtualScroller.refresh(); // full refresh only on error to revert
+                // Revert DataStore
+                DataStore.updateField(context, policyno, 'star_note', oldRaw, monthKey, entryId);
+                td.classList.toggle('starred-note', !isStarring);
+                VirtualScroller.refresh(); // full refresh to revert everything
             });
 
             const noteLabel = field.replace('note', 'Note ');
