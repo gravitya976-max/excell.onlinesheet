@@ -970,6 +970,9 @@ const App = (() => {
             const monthKey = `${state.year}-${state.month}`;
             DataStore.updateField(context, policyno, 'star_note', newRaw, monthKey, entryId);
 
+            // Also update VirtualScroller's cached data (so scroll re-renders use correct value)
+            VirtualScroller.updateFieldByEntryId(entryId, 'star_note', newRaw);
+
             // Immediate visual feedback on the clicked note cell
             td.classList.toggle('starred-note', isStarring);
 
@@ -1040,8 +1043,9 @@ const App = (() => {
             // Save to server
             api('PUT', `/api/entry/${entryId}`, { star_note: newRaw }).catch(() => {
                 toast('Failed to save star note', 'error');
-                // Revert DataStore
+                // Revert DataStore and VirtualScroller cache
                 DataStore.updateField(context, policyno, 'star_note', oldRaw, monthKey, entryId);
+                VirtualScroller.updateFieldByEntryId(entryId, 'star_note', oldRaw);
                 td.classList.toggle('starred-note', !isStarring);
                 VirtualScroller.refresh(); // full refresh to revert everything
             });

@@ -301,6 +301,26 @@ const VirtualScroller = (() => {
     /** Register a callback that fires after each row is rendered: fn(tr, dataIndex) */
     function onRowRendered(fn) { _rowHooks.push(fn); }
 
+    /** Update a field in-place on the internal data entry matching entryId (no re-render) */
+    function updateFieldByEntryId(entryId, field, value) {
+        if (!_data) return;
+        for (let i = 0; i < _data.length; i++) {
+            if ((_data[i]._monthlyId || _data[i].id) === entryId) {
+                _data[i][field] = value;
+                return;
+            }
+        }
+        // Also check NIF data
+        if (_nifData) {
+            for (let i = 0; i < _nifData.length; i++) {
+                if ((_nifData[i]._monthlyId || _nifData[i].id) === entryId) {
+                    _nifData[i][field] = value;
+                    return;
+                }
+            }
+        }
+    }
+
     return {
         init, setData, setNifData, setAllData, refresh, scrollToRow,
         getVisibleRange, updateRow, getDataLength,
@@ -308,5 +328,6 @@ const VirtualScroller = (() => {
         getRowHeight, getExtraRowCount, destroy,
         onRowRendered,
         refreshAllRows: refresh,
+        updateFieldByEntryId,
     };
 })();
