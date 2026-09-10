@@ -27,6 +27,13 @@ const DataStore = (() => {
     // ── Policies index for O(1) lookup ───────────────────────────────
     let _policyIndex = {};  // { policyno: index_in_policies }
 
+    // Debounced save to localStorage (avoid excessive writes on rapid edits)
+    let _saveTimer = null;
+    function _debouncedSave() {
+        if (_saveTimer) clearTimeout(_saveTimer);
+        _saveTimer = setTimeout(() => saveToLocal(), 500);
+    }
+
     function rebuildIndex() {
         _policyIndex = {};
         _policies.forEach((p, i) => { _policyIndex[p.policyno] = i; });
@@ -191,6 +198,8 @@ const DataStore = (() => {
         }
         
         _notify('update');
+        // Debounced persist to localStorage so edits survive browser refresh
+        _debouncedSave();
     }
 
     /**
