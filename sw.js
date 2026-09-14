@@ -15,9 +15,18 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-    // Network-first for API calls, cache-first for static assets
+    // Skip API calls — always network
     if (e.request.url.includes('/api/')) return;
+    // Only cache GET requests
+    if (e.request.method !== 'GET') return;
     e.respondWith(
-        fetch(e.request).catch(() => caches.match(e.request))
+        fetch(e.request).then(resp => {
+            // Cache successful responses for offline fallback
+            if (resp.ok) {
+                const clone = resp.clone();
+                caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
+            }
+            return resp;
+        }).catch(() => caches.match(e.request))
     );
 });

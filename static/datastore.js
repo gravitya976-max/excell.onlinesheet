@@ -22,7 +22,7 @@ const DataStore = (() => {
     const STORAGE_KEY = 'os_datastore_v2';
     const MONTHLY_ONLY_FIELDS = new Set(['note1','note2','note3','note4','note5',
                                           'note6','note7','note8','note9','note10',
-                                          'due_months']);
+                                          'due_months','star_note','row_color']);
 
     // ── Policies index for O(1) lookup ───────────────────────────────
     let _policyIndex = {};  // { policyno: index_in_policies }
@@ -109,10 +109,26 @@ const DataStore = (() => {
     function loadBulkData(allMonthlyData, availableMonths) {
         // allMonthlyData = { "2026-7": [...], "2026-6": [...], ... }
         for (const key in allMonthlyData) {
-            // Don't overwrite if already loaded (user might have edited)
             if (!_monthlyOverlays[key]) {
+                // No local data — use server data directly
                 _monthlyOverlays[key] = allMonthlyData[key].entries || [];
                 _monthlyMeta[key] = allMonthlyData[key].meta || null;
+            } else {
+                // Merge: keep local edits (status, notes, star_note, row_color)
+                // but accept new server entries that don't exist locally
+                const localOverlay = _monthlyOverlays[key];
+                const localMap = {};
+                localOverlay.forEach(e => { localMap[e.policyno] = e; });
+                const serverEntries = allMonthlyData[key].entries || [];
+                serverEntries.forEach(se => {
+                    if (!localMap[se.policyno]) {
+                        localOverlay.push(se); // new entry from server
+                    }
+                    // Don't overwrite existing local entries — they may have edits
+                });
+                if (allMonthlyData[key].meta) {
+                    _monthlyMeta[key] = allMonthlyData[key].meta;
+                }
             }
         }
         _availableMonths = availableMonths || [];
@@ -291,7 +307,7 @@ const DataStore = (() => {
             };
             localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
         } catch (e) {
-            // Storage full or unavailable — silently skip
+            console.warn('DataStore: saveToLocal failed', e);
         }
     }
 
@@ -314,7 +330,8 @@ const DataStore = (() => {
             rebuildIndex();
             _ready = true;
             return true;
-        } catch {
+        } catch (e) {
+            console.warn('DataStore: loadFromLocal failed', e);
             return false;
         }
     }
@@ -331,7 +348,7 @@ const DataStore = (() => {
     }
 
     function _notify(reason) {
-        _listeners.forEach(cb => { try { cb(reason); } catch {} });
+        _listeners.forEach(cb => { try { cb(reason); } catch (e) { console.warn('DataStore listener error', e); } });
     }
 
     // ── Utilities ────────────────────────────────────────────────────

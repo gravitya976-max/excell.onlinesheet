@@ -31,7 +31,6 @@ const CRM = (() => {
     let _dragAction = null;           // 'select' or 'deselect'
     let _anchorDataIdx = -1;          // data index (vsIdx) of anchor row
     let _currentDataIdx = -1;         // data index of current row under pointer
-    let _lastMouseX = 0;
     let _lastMouseY = 0;
     let _scrollSpeed = 0;             // px/frame: negative = up, positive = down
     let _dragRAF = null;              // single rAF loop for scroll + selection
@@ -114,6 +113,8 @@ const CRM = (() => {
         // ── Hook into virtual scroller: sync crm-selected + call highlights on freshly rendered rows ──
         if (typeof VirtualScroller !== 'undefined' && VirtualScroller.onRowRendered) {
             VirtualScroller.onRowRendered((tr) => {
+                // Early-return when not in any CRM mode (perf: skip work for every row)
+                if (!mode) return;
                 const pno = _getPolicyFromRow(tr);
 
                 // SMS selection highlight
@@ -284,7 +285,6 @@ const CRM = (() => {
 
         _dragging = true;
         _anchorDataIdx = parseInt(tr.dataset.vsIdx) || 0;
-        _lastMouseX = e.clientX;
         _lastMouseY = e.clientY;
         _currentDataIdx = _anchorDataIdx;
 
@@ -313,7 +313,6 @@ const CRM = (() => {
 
     function onDragMove(e) {
         if (!_dragging) return;
-        _lastMouseX = e.clientX;
         _lastMouseY = e.clientY;
         _scrollSpeed = _computeScrollSpeed(e.clientY);
 
@@ -850,7 +849,7 @@ const CRM = (() => {
                 fup: entry.fup || '',
                 doc: entry.doc || '',
                 status: statusLabel,
-                rowEl: tr,
+                rowEl: null, // Don't hold DOM ref — VirtualScroller recycles rows
                 // Extra fields for custom mode
                 due_months: entry.due_months || '',
                 mode: entry.mode || entry.mobileno_mode || '',
@@ -1876,10 +1875,10 @@ const CRM = (() => {
     }
 
     // ── Escape HTML ──────────────────────────────────────────────────
+    const _escEl = document.createElement('div');
     function esc(s) {
-        const d = document.createElement('div');
-        d.textContent = s || '';
-        return d.innerHTML;
+        _escEl.textContent = s || '';
+        return _escEl.innerHTML;
     }
 
     // ── Public ───────────────────────────────────────────────────────

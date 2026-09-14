@@ -723,6 +723,22 @@ const Spreadsheet = (() => {
         if (typeof App !== 'undefined' && App.state.activeTab !== 'list') return;
         let entries = App.getEntries();
 
+        // Respect active stat pill filter — don't show all entries when a filter is active
+        const activeStatFilter = (typeof App !== 'undefined' && App.getActiveStatFilter) ? App.getActiveStatFilter() : null;
+        if (activeStatFilter && activeStatFilter !== 'total') {
+            const PAID_FILTER_SET = new Set(['paid', 'autodebit', 'dailycollection', 'branchpaid']);
+            if (activeStatFilter === 'due') {
+                entries = entries.filter(e => {
+                    const s = (e.status || '').trim().toLowerCase();
+                    return s === '' || s === 'due' || (!PAID_FILTER_SET.has(s) && s !== 'notinforce');
+                });
+            } else if (activeStatFilter === 'paid') {
+                entries = entries.filter(e => PAID_FILTER_SET.has((e.status || '').trim().toLowerCase()));
+            } else if (activeStatFilter === 'nif') {
+                entries = entries.filter(e => (e.status || '').trim().toLowerCase() === 'notinforce');
+            }
+        }
+
         // Respect active search filter — don't replace filtered results with full dataset
         const filterText = (typeof App !== 'undefined' && App.getFilterText) ? App.getFilterText() : '';
         if (filterText) {

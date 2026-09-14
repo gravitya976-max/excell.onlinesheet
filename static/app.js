@@ -143,7 +143,12 @@ const App = (() => {
         }
 
         Spreadsheet.render(entries);
-        applyFilter($('#search-input').value);
+        // Re-apply active stat filter or search filter to keep view consistent
+        if (_activeStatFilter && _activeStatFilter !== 'total') {
+            _filterByStatus(_activeStatFilter);
+        } else {
+            applyFilter($('#search-input').value);
+        }
     }
 
     function getEntries() {
@@ -280,6 +285,17 @@ const App = (() => {
             filtered = all;
         }
         Spreadsheet.render(filtered);
+    }
+
+    /** Re-apply the active stat filter (called after status changes to keep view consistent) */
+    function reapplyActiveStatFilter() {
+        if (_activeStatFilter && _activeStatFilter !== 'total') {
+            _filterByStatus(_activeStatFilter);
+        }
+    }
+
+    function getActiveStatFilter() {
+        return _activeStatFilter;
     }
 
     // ── Fetch individual month (fallback if not in bulk cache) ────────
@@ -746,7 +762,12 @@ const App = (() => {
         if (Spreadsheet.onStatusChange) {
             Spreadsheet.onStatusChange(() => {
                 computeAndUpdateStats();
-                Spreadsheet.resortEntries(); // Move NIF rows to bottom
+                if (_activeStatFilter && _activeStatFilter !== 'total') {
+                    // Re-apply the active stat filter so the view stays consistent
+                    _filterByStatus(_activeStatFilter);
+                } else {
+                    Spreadsheet.resortEntries(); // Move NIF rows to bottom
+                }
             });
         }
 
@@ -1087,5 +1108,6 @@ const App = (() => {
         applyFilter,
         clearSearch,
         updateMonthLabel,
+        getActiveStatFilter,
     };
 })();
