@@ -1196,6 +1196,15 @@ td.saved::after {
     animation: syncPulse 1.5s ease-in-out infinite;
 }
 
+.sync-dot.sync-syncing {
+    background: var(--blue);
+    animation: syncPulse 1s ease-in-out infinite;
+}
+
+.sync-dot.sync-error {
+    background: var(--orange);
+}
+
 @keyframes syncPulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.4; }

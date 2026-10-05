@@ -14,6 +14,8 @@ const App = (() => {
         activeTab: 'list',
     };
 
+    const SYNC_INTERVAL = 3 * 60 * 1000; // 3 minutes — periodic server sync
+
     const MONTH_NAMES = [
         '', 'January', 'February', 'March', 'April', 'May', 'June',
         'July', 'August', 'September', 'October', 'November', 'December'
@@ -533,7 +535,11 @@ const App = (() => {
     }
 
     // ── Background bulk load ──────────────────────────────────────────
-    async function refreshBulkData() {
+    let _isSyncing = false;
+    async function refreshBulkData(silent = false) {
+        if (_isSyncing) return; // prevent double-fetching
+        _isSyncing = true;
+        _updateSyncIndicator('syncing');
         try {
             const data = await api('GET', '/api/session/bulk');
             DataStore.loadInitialData(
@@ -541,8 +547,40 @@ const App = (() => {
                 null, null, null  // don't overwrite current month
             );
             DataStore.loadBulkData(data.monthlyData, data.availableMonths);
+            // Always re-render after bulk load to show latest server data
+            renderCurrentView();
+            _updateSyncIndicator('online');
+            if (!silent) console.info('Bulk sync complete:', new Date().toLocaleTimeString());
         } catch (e) {
             console.warn('Bulk load failed:', e.message);
+            _updateSyncIndicator('error');
+        }
+        _isSyncing = false;
+    }
+
+    /** Update the sync dot + text in footer */
+    function _updateSyncIndicator(status) {
+        const dot = document.querySelector('.sync-dot');
+        const text = $('#sync-text');
+        if (!dot || !text) return;
+        dot.classList.remove('sync-online', 'sync-offline', 'sync-syncing', 'sync-error');
+        switch (status) {
+            case 'syncing':
+                dot.classList.add('sync-syncing');
+                text.textContent = 'Syncing...';
+                break;
+            case 'online':
+                dot.classList.add('sync-online');
+                text.textContent = 'Synced';
+                break;
+            case 'offline':
+                dot.classList.add('sync-offline');
+                text.textContent = 'Offline';
+                break;
+            case 'error':
+                dot.classList.add('sync-error');
+                text.textContent = 'Sync error';
+                break;
         }
     }
 
@@ -738,25 +776,26 @@ const App = (() => {
         }
 
         // ── Initial data load strategy ──────────────────────────────
-        // 1. Try localStorage cache (instant)
-        // 2. Fetch current view from API
-        // 3. Background bulk load everything else
+        // 1. Try localStorage cache (instant render while loading)
+        // 2. Always fetch fresh current view from server
+        // 3. Background bulk load all data (replaces cache with server truth)
+        // This ensures any device — new or old — always shows latest data.
 
         const hasCached = DataStore.loadFromLocal();
         if (hasCached) {
-            // Instant render from cache
+            // Instant render from cache as a loading screen
             refreshMasterCount();
             renderCurrentView();
-            toast('Loaded from cache', 'info', 1500);
         }
 
-        // Always fetch fresh current view
+        // Always fetch fresh current view from server (this is the real data)
         fetchMonthData(state.year, state.month).then(() => {
             refreshMasterCount();
         });
 
-        // Background: bulk load all data
-        setTimeout(() => refreshBulkData(), hasCached ? 3000 : 500);
+        // Background: bulk load all data — replaces cache with server truth
+        // Short delay so the current view loads first
+        setTimeout(() => refreshBulkData(), hasCached ? 2000 : 300);
 
         // Real-time stat pill updates + NIF re-sort when a status cell changes
         if (Spreadsheet.onStatusChange) {
@@ -786,26 +825,82 @@ const App = (() => {
         // ── Online / Offline events ────────────────────────────────
         window.addEventListener('online', () => {
             toast('Back online — syncing...', 'success', 2500);
-            // Flush offline queue
+            _updateSyncIndicator('syncing');
+            // Flush offline queue first, then sync fresh data
             if (typeof OfflineQueue !== 'undefined') {
                 OfflineQueue.flush().then(() => {
                     OfflineQueue.updateIndicator();
+                    // After queue flushed, get fresh data from server
+                    fetchMonthData(state.year, state.month).then(() => refreshMasterCount());
+                    setTimeout(() => refreshBulkData(), 500);
                 });
+            } else {
+                fetchMonthData(state.year, state.month).then(() => refreshMasterCount());
+                setTimeout(() => refreshBulkData(), 500);
             }
-            // Auto-fetch fresh data
-            fetchMonthData(state.year, state.month).then(() => refreshMasterCount());
-            setTimeout(() => refreshBulkData(), 1000);
         });
         window.addEventListener('offline', () => {
             toast('You are offline — changes will sync later', 'info', 3000);
+            _updateSyncIndicator('offline');
             if (typeof OfflineQueue !== 'undefined') OfflineQueue.updateIndicator();
         });
+
+        // ── Visibility change: re-sync when user returns to tab ────
+        // If the tab was hidden for >60 seconds, re-fetch from server
+        let _lastVisible = Date.now();
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                const hiddenFor = Date.now() - _lastVisible;
+                if (hiddenFor > 60000 && navigator.onLine) {
+                    // Tab was hidden for >1 min — data may be stale
+                    console.info('Tab restored after', Math.round(hiddenFor/1000), 's — re-syncing');
+                    fetchMonthData(state.year, state.month).then(() => refreshMasterCount());
+                    setTimeout(() => refreshBulkData(true), 500);
+                }
+            } else {
+                _lastVisible = Date.now();
+            }
+        });
+
+        // ── Periodic background sync (every 3 min while online) ────
+        // Keeps data fresh for long-running sessions and across devices
+        setInterval(() => {
+            if (navigator.onLine && document.visibilityState === 'visible') {
+                if (DataStore.isStale()) {
+                    console.info('Periodic sync — data is stale, refreshing');
+                    refreshBulkData(true);
+                }
+            }
+        }, SYNC_INTERVAL);
 
         // ── Register Service Worker ────────────────────────────────
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
-                .then(reg => { if (reg) reg.update(); })
+                .then(reg => {
+                    if (!reg) return;
+                    // Force check for updates
+                    reg.update();
+                    // Detect when a new SW version is found
+                    reg.addEventListener('updatefound', () => {
+                        const newSW = reg.installing;
+                        if (!newSW) return;
+                        newSW.addEventListener('statechange', () => {
+                            if (newSW.state === 'activated') {
+                                // New SW is active — clear old caches and reload
+                                toast('App updated — reloading...', 'info', 2000);
+                                setTimeout(() => window.location.reload(), 2000);
+                            }
+                        });
+                    });
+                })
                 .catch(() => {});
+
+            // Listen for messages from SW (e.g. cache cleared confirmation)
+            navigator.serviceWorker.addEventListener('message', (event) => {
+                if (event.data?.type === 'CACHE_CLEARED') {
+                    console.info('Service Worker cache cleared');
+                }
+            });
         }
 
         // ── Hamburger menu (mobile) ────────────────────────────────

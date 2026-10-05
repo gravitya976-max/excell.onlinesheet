@@ -413,7 +413,15 @@ def service_worker():
 
 @app.get("/")
 def root():
-    return HTMLResponse(open(os.path.join(BASE_DIR, "index.html"), encoding="utf-8").read())
+    content = open(os.path.join(BASE_DIR, "index.html"), encoding="utf-8").read()
+    return HTMLResponse(
+        content=content,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])

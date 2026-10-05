@@ -18,8 +18,11 @@ const DataStore = (() => {
     let _listeners = [];             // onChange callbacks
     let _ready = false;              // true after initial load
     let _bulkLoaded = false;         // true after background bulk load
+    let _lastServerSync = 0;         // timestamp of last successful server sync
+    let _hasPendingEdits = false;    // true when local edits haven't been confirmed by server
 
-    const STORAGE_KEY = 'os_datastore_v2';
+    const STORAGE_KEY = 'os_datastore_v3';
+    const CACHE_TTL = 4 * 60 * 60 * 1000;  // 4 hours max cache age
     const MONTHLY_ONLY_FIELDS = new Set(['note1','note2','note3','note4','note5',
                                           'note6','note7','note8','note9','note10',
                                           'due_months','star_note','row_color']);
@@ -107,30 +110,63 @@ const DataStore = (() => {
      * Load bulk data (all months) from background fetch.
      */
     function loadBulkData(allMonthlyData, availableMonths) {
+        // Determine current viewing month to preserve local edits only for it
+        const now = new Date();
+        const currentKey = `${now.getFullYear()}-${now.getMonth() + 1}`;
+
         // allMonthlyData = { "2026-7": [...], "2026-6": [...], ... }
         for (const key in allMonthlyData) {
+            const serverEntries = allMonthlyData[key].entries || [];
+
             if (!_monthlyOverlays[key]) {
                 // No local data — use server data directly
-                _monthlyOverlays[key] = allMonthlyData[key].entries || [];
+                _monthlyOverlays[key] = serverEntries;
                 _monthlyMeta[key] = allMonthlyData[key].meta || null;
-            } else {
-                // Merge: keep local edits (status, notes, star_note, row_color)
-                // but accept new server entries that don't exist locally
+            } else if (key === currentKey) {
+                // Current month: merge — keep local edits (status, notes, star_note, row_color)
+                // but use server as base and add any new entries
                 const localOverlay = _monthlyOverlays[key];
                 const localMap = {};
                 localOverlay.forEach(e => { localMap[e.policyno] = e; });
-                const serverEntries = allMonthlyData[key].entries || [];
-                serverEntries.forEach(se => {
-                    if (!localMap[se.policyno]) {
-                        localOverlay.push(se); // new entry from server
+
+                // Start from server entries, preserve local edits where they exist
+                const PRESERVE_FIELDS = new Set(['status','note1','note2','note3','note4','note5',
+                                                  'note6','note7','note8','note9','note10',
+                                                  'due_months','star_note','row_color']);
+                const merged = serverEntries.map(se => {
+                    const local = localMap[se.policyno];
+                    if (local) {
+                        // Server base + local edits on top
+                        const result = { ...se };
+                        PRESERVE_FIELDS.forEach(f => {
+                            if (local[f] !== undefined && local[f] !== '') {
+                                result[f] = local[f];
+                            }
+                        });
+                        return result;
                     }
-                    // Don't overwrite existing local entries — they may have edits
+                    return se;
                 });
+                _monthlyOverlays[key] = merged;
                 if (allMonthlyData[key].meta) {
                     _monthlyMeta[key] = allMonthlyData[key].meta;
                 }
+            } else {
+                // Non-current month: always replace with server data
+                // (no risk of losing in-progress edits)
+                _monthlyOverlays[key] = serverEntries;
+                _monthlyMeta[key] = allMonthlyData[key].meta || null;
             }
         }
+
+        // Remove local overlays for months that no longer exist on server
+        for (const key in _monthlyOverlays) {
+            if (!allMonthlyData[key]) {
+                delete _monthlyOverlays[key];
+                delete _monthlyMeta[key];
+            }
+        }
+
         _availableMonths = availableMonths || [];
         _bulkLoaded = true;
         saveToLocal();
@@ -139,20 +175,27 @@ const DataStore = (() => {
 
     /**
      * Set monthly overlay for a specific month (after generate or fresh fetch).
+     * This comes from the server — always save to cache immediately.
      */
     function setMonthlyData(year, month, entries, meta) {
         const key = `${year}-${month}`;
         _monthlyOverlays[key] = entries || [];
         if (meta) _monthlyMeta[key] = meta;
+        _lastServerSync = Date.now();
+        _hasPendingEdits = false;
+        _debouncedSave();
         _notify('monthly-set');
     }
 
     /**
      * Replace master policies (after fresh fetch).
+     * This comes from the server — always save to cache immediately.
      */
     function setMasterData(policies) {
         _policies = policies || [];
         rebuildIndex();
+        _lastServerSync = Date.now();
+        _debouncedSave();
         _notify('master-set');
     }
 
@@ -213,6 +256,7 @@ const DataStore = (() => {
             }
         }
         
+        _hasPendingEdits = true;
         _notify('update');
         // Debounced persist to localStorage so edits survive browser refresh
         _debouncedSave();
@@ -298,12 +342,16 @@ const DataStore = (() => {
 
     function saveToLocal() {
         try {
+            const now = new Date();
             const data = {
                 policies: _policies,
                 monthlyOverlays: _monthlyOverlays,
                 monthlyMeta: _monthlyMeta,
                 availableMonths: _availableMonths,
-                savedAt: Date.now()
+                savedAt: Date.now(),
+                savedMonth: now.getMonth() + 1,
+                savedYear: now.getFullYear(),
+                lastServerSync: _lastServerSync
             };
             localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
         } catch (e) {
@@ -317,16 +365,31 @@ const DataStore = (() => {
             if (!raw) return false;
             const data = JSON.parse(raw);
             
-            // Don't use stale data (older than 24 hours)
-            if (Date.now() - (data.savedAt || 0) > 86400000) {
+            // Don't use stale data (older than CACHE_TTL — 4 hours)
+            if (Date.now() - (data.savedAt || 0) > CACHE_TTL) {
                 localStorage.removeItem(STORAGE_KEY);
                 return false;
+            }
+
+            // Invalidate cache if the month has changed since it was saved
+            // (e.g. cache from September should not be used in October)
+            const now = new Date();
+            const currentMonth = now.getMonth() + 1;
+            const currentYear = now.getFullYear();
+            if (data.savedMonth && data.savedYear) {
+                if (data.savedMonth !== currentMonth || data.savedYear !== currentYear) {
+                    console.info('DataStore: cache invalidated — month changed from',
+                        data.savedMonth + '/' + data.savedYear, 'to', currentMonth + '/' + currentYear);
+                    localStorage.removeItem(STORAGE_KEY);
+                    return false;
+                }
             }
             
             _policies = data.policies || [];
             _monthlyOverlays = data.monthlyOverlays || {};
             _monthlyMeta = data.monthlyMeta || {};
             _availableMonths = data.availableMonths || [];
+            _lastServerSync = data.lastServerSync || 0;
             rebuildIndex();
             _ready = true;
             return true;
@@ -335,6 +398,17 @@ const DataStore = (() => {
             return false;
         }
     }
+
+    /**
+     * Migrate: clear old storage keys from previous versions.
+     */
+    function migrateOldStorage() {
+        try {
+            const oldKeys = ['os_datastore_v2', 'os_datastore_v1'];
+            oldKeys.forEach(k => localStorage.removeItem(k));
+        } catch (_) {}
+    }
+    migrateOldStorage();
 
     function clearLocal() {
         localStorage.removeItem(STORAGE_KEY);
@@ -368,10 +442,21 @@ const DataStore = (() => {
     function isReady() { return _ready; }
     function isBulkLoaded() { return _bulkLoaded; }
     function getPolicyCount() { return _policies.length; }
+    function getLastServerSync() { return _lastServerSync; }
+    function hasPendingEdits() { return _hasPendingEdits; }
 
     function getMonthlyEntryCount(year, month) {
         const overlay = _monthlyOverlays[`${year}-${month}`];
         return overlay ? overlay.length : 0;
+    }
+
+    /**
+     * Check if local cache is stale and should be re-fetched from server.
+     * Stale = last server sync was more than `maxAgeMs` ago (default 3 min).
+     */
+    function isStale(maxAgeMs = 180000) {
+        if (!_lastServerSync) return true;
+        return (Date.now() - _lastServerSync) > maxAgeMs;
     }
 
     // ── Public API ───────────────────────────────────────────────────
@@ -408,7 +493,10 @@ const DataStore = (() => {
         getAvailableMonths,
         isReady,
         isBulkLoaded,
+        isStale,
         getPolicyCount,
+        getLastServerSync,
+        hasPendingEdits,
         getMonthlyEntryCount,
     };
 })();
