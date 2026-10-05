@@ -775,11 +775,46 @@ const App = (() => {
             });
         }
 
+        // ── ONE-TIME CACHE CLEANUP (v3.8.0 migration) ─────────────────
+        // Nuclear option: wipe ALL old caches so no stale data persists.
+        // Runs once per version, then sets a flag so it won't run again.
+        const CACHE_BUST_KEY = 'os_cache_bust_v380';
+        if (!localStorage.getItem(CACHE_BUST_KEY)) {
+            console.info('🧹 v3.8.0 cache cleanup: wiping all stale data');
+            // 1. Clear ALL localStorage items for this app
+            ['os_datastore_v1', 'os_datastore_v2', 'os_datastore_v3'].forEach(k => {
+                try { localStorage.removeItem(k); } catch(_){}
+            });
+            // 2. Clear ALL Cache API caches (service worker caches)
+            if ('caches' in window) {
+                caches.keys().then(keys => {
+                    keys.forEach(k => caches.delete(k));
+                    console.info('Cleared', keys.length, 'SW caches');
+                });
+            }
+            // 3. Unregister old service workers and re-register fresh
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistrations().then(regs => {
+                    regs.forEach(r => r.unregister());
+                    console.info('Unregistered', regs.length, 'old service workers');
+                });
+            }
+            // 4. Mark cleanup as done
+            localStorage.setItem(CACHE_BUST_KEY, Date.now().toString());
+            // 5. Force DataStore to start clean (no stale cache)
+            DataStore.clearLocal();
+        }
+
         // ── Initial data load strategy ──────────────────────────────
         // 1. Try localStorage cache (instant render while loading)
         // 2. Always fetch fresh current view from server
         // 3. Background bulk load all data (replaces cache with server truth)
         // This ensures any device — new or old — always shows latest data.
+
+        // FORCE current calendar month (never inherit from old cache)
+        state.year = new Date().getFullYear();
+        state.month = new Date().getMonth() + 1;
+        updateMonthLabel();
 
         const hasCached = DataStore.loadFromLocal();
         if (hasCached) {
@@ -791,6 +826,7 @@ const App = (() => {
         // Always fetch fresh current view from server (this is the real data)
         fetchMonthData(state.year, state.month).then(() => {
             refreshMasterCount();
+            renderCurrentView(); // Re-render with fresh server data
         });
 
         // Background: bulk load all data — replaces cache with server truth
