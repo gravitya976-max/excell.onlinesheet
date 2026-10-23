@@ -743,6 +743,19 @@ mark.search-hl {
     background: var(--bg-cell-hover);
 }
 
+/* ── Row colors via data attribute (replaces inline styles) ──────── */
+tr[data-row-color="rose"] td { background: #f5d5d5; }
+tr[data-row-color="teal"] td { background: #d5ebe7; }
+tr[data-row-color="lilac"] td { background: #e2d9f0; }
+tr[data-row-color="sand"] td { background: #ede5d8; }
+tr[data-row-color="slate"] td { background: #d9e2ea; }
+tr[data-row-color="blush"] td { background: #ecd8df; }
+
+/* Hover ALWAYS wins over row colors */
+.spreadsheet tr[data-row-color]:hover td {
+    background: var(--bg-cell-hover) !important;
+}
+
 .spreadsheet.nav-has-selection tr:hover td {
     background: var(--bg-cell);
 }

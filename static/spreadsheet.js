@@ -404,10 +404,9 @@ const Spreadsheet = (() => {
         if ((entry.status || '').toLowerCase() === 'notinforce') {
             tr.classList.add('nif-row');
         }
-        // Row color — apply inline background
+        // Row color — use data attribute (CSS handles background + hover)
         const rowColor = entry.row_color || '';
         if (rowColor && ROW_COLORS[rowColor]) {
-            tr.style.backgroundColor = ROW_COLORS[rowColor];
             tr.dataset.rowColor = rowColor;
         }
 
@@ -423,10 +422,7 @@ const Spreadsheet = (() => {
                 return;
             }
 
-            // Apply row color to each td (for status cells that have !important bg)
-            if (rowColor && ROW_COLORS[rowColor] && col.type !== 'status') {
-                td.style.backgroundColor = ROW_COLORS[rowColor];
-            }
+            // Row color now handled via tr[data-row-color] in CSS — no inline style needed
 
             if (col.type === 'index') {
                 td.classList.add('locked', 'sn-delete');
@@ -605,15 +601,12 @@ const Spreadsheet = (() => {
     function applyRowColor(tr, entry, entryId, newColor, oldColor) {
         entry.row_color = newColor;
 
-        // Update visual immediately
-        const bg = (newColor && ROW_COLORS[newColor]) ? ROW_COLORS[newColor] : '';
-        tr.style.backgroundColor = bg;
-        if (bg) {
+        // Update visual via data attribute (CSS handles background + hover)
+        if (newColor && ROW_COLORS[newColor]) {
             tr.dataset.rowColor = newColor;
         } else {
             delete tr.dataset.rowColor;
         }
-        tr.querySelectorAll('td').forEach(td => { td.style.backgroundColor = bg; });
 
         // Persist — use App.updateEntry directly (avoids saveCell's DOM dependency)
         if (App.state.activeTab === 'master') {

@@ -128,9 +128,13 @@ const App = (() => {
                 // No list generated for this month — check if we need to fetch
                 if (DataStore.isBulkLoaded() || DataStore.hasMonthData(state.year, state.month)) {
                     showEmptyState();
-                } else {
-                    // Not yet loaded — fetch this month
+                } else if (navigator.onLine) {
+                    // Online and not yet loaded — fetch this month
                     fetchMonthData(state.year, state.month);
+                } else {
+                    // Offline and no cached data — show offline-aware empty state
+                    showEmptyState();
+                    $('#info-count').textContent = 'Offline — no cached data';
                 }
                 return;
             }
@@ -138,19 +142,20 @@ const App = (() => {
         } else {
             // Master tab — fetch from server if DataStore has no master data yet
             if (entries.length === 0 && !DataStore.isBulkLoaded()) {
-                fetchMasterData();
+                if (navigator.onLine) {
+                    fetchMasterData();
+                } else {
+                    showEmptyState();
+                    $('#info-count').textContent = 'Offline — no cached data';
+                }
                 return;
             }
             showMasterState(entries);
         }
 
         Spreadsheet.render(entries);
-        // Re-apply active stat filter or search filter to keep view consistent
-        if (_activeStatFilter && _activeStatFilter !== 'total') {
-            _filterByStatus(_activeStatFilter);
-        } else {
-            applyFilter($('#search-input').value);
-        }
+        // Re-apply stat filter + search filter (composable pipeline)
+        _applyFilters();
     }
 
     function getEntries() {
@@ -242,12 +247,11 @@ const App = (() => {
                     // Toggle off — show all
                     _activeStatFilter = null;
                     _clearStatHighlight(pills);
-                    applyFilter($('#search-input').value);
-                    return;
+                } else {
+                    _activeStatFilter = key;
+                    _highlightStat(pills, key);
                 }
-                _activeStatFilter = key;
-                _highlightStat(pills, key);
-                _filterByStatus(key);
+                _applyFilters();
             });
         });
     }
@@ -269,31 +273,42 @@ const App = (() => {
         });
     }
 
-    function _filterByStatus(key) {
-        const all = getEntries();
-        let filtered;
-        if (key === 'total') {
-            filtered = all;
-        } else if (key === 'due') {
-            filtered = all.filter(e => {
-                const s = (e.status || '').trim().toLowerCase();
-                return s === '' || s === 'due' || (!PAID_FILTER_SET.has(s) && s !== 'notinforce');
-            });
-        } else if (key === 'paid') {
-            filtered = all.filter(e => PAID_FILTER_SET.has((e.status || '').trim().toLowerCase()));
-        } else if (key === 'nif') {
-            filtered = all.filter(e => (e.status || '').trim().toLowerCase() === 'notinforce');
-        } else {
-            filtered = all;
+    /**
+     * Unified filter pipeline: status pill → then search text.
+     * Both filters compose — search always runs within the stat-filtered set.
+     */
+    function _applyFilters() {
+        let entries = getEntries();
+
+        // Step 1: Filter by status pill (if active)
+        if (_activeStatFilter && _activeStatFilter !== 'total') {
+            if (_activeStatFilter === 'due') {
+                entries = entries.filter(e => {
+                    const s = (e.status || '').trim().toLowerCase();
+                    return s === '' || s === 'due' || (!PAID_FILTER_SET.has(s) && s !== 'notinforce');
+                });
+            } else if (_activeStatFilter === 'paid') {
+                entries = entries.filter(e => PAID_FILTER_SET.has((e.status || '').trim().toLowerCase()));
+            } else if (_activeStatFilter === 'nif') {
+                entries = entries.filter(e => (e.status || '').trim().toLowerCase() === 'notinforce');
+            }
         }
-        Spreadsheet.render(filtered);
+
+        // Step 2: Filter by search text (within stat-filtered set)
+        if (_filterText) {
+            entries = entries.filter(entry =>
+                Object.values(entry).some(v =>
+                    v != null && String(v).toLowerCase().includes(_filterText)
+                )
+            );
+        }
+
+        Spreadsheet.render(entries);
     }
 
-    /** Re-apply the active stat filter (called after status changes to keep view consistent) */
+    /** Re-apply filters (called after status changes to keep view consistent) */
     function reapplyActiveStatFilter() {
-        if (_activeStatFilter && _activeStatFilter !== 'total') {
-            _filterByStatus(_activeStatFilter);
-        }
+        _applyFilters();
     }
 
     function getActiveStatFilter() {
@@ -361,23 +376,12 @@ const App = (() => {
         // Show/hide clear button
         const clearBtn = $('#search-clear');
         if (clearBtn) clearBtn.classList.toggle('hidden', !_filterText);
-        applyFilter(_filterText);
+        _applyFilters();
     }
 
     function applyFilter(text) {
         _filterText = (text || '').trim().toLowerCase();
-        if (!_filterText) {
-            // No filter — render full view
-            Spreadsheet.render(getEntries());
-            return;
-        }
-        const all = getEntries();
-        const filtered = all.filter(entry => {
-            return Object.values(entry).some(v =>
-                v != null && String(v).toLowerCase().includes(_filterText)
-            );
-        });
-        Spreadsheet.render(filtered);
+        _applyFilters();
     }
 
     function getFilterText() { return _filterText; }
@@ -819,27 +823,36 @@ const App = (() => {
         const hasCached = DataStore.loadFromLocal();
         if (hasCached) {
             // Instant render from cache as a loading screen
-            refreshMasterCount();
             renderCurrentView();
         }
 
-        // Always fetch fresh current view from server (this is the real data)
-        fetchMonthData(state.year, state.month).then(() => {
-            refreshMasterCount();
-            renderCurrentView(); // Re-render with fresh server data
-        });
+        if (navigator.onLine) {
+            // Online: fetch fresh current view from server (this is the real data)
+            fetchMonthData(state.year, state.month).then(() => {
+                refreshMasterCount();
+                renderCurrentView(); // Re-render with fresh server data
+            });
 
-        // Background: bulk load all data — replaces cache with server truth
-        // Short delay so the current view loads first
-        setTimeout(() => refreshBulkData(), hasCached ? 2000 : 300);
+            // Background: bulk load all data — replaces cache with server truth
+            // Short delay so the current view loads first
+            setTimeout(() => refreshBulkData(), hasCached ? 2000 : 300);
+        } else {
+            // Offline: rely on cached data, show offline indicator
+            _updateSyncIndicator('offline');
+            if (!hasCached) {
+                // No cache at all — show offline message
+                showEmptyState();
+                $('#info-count').textContent = 'Offline — open while online first to cache data';
+            }
+        }
 
         // Real-time stat pill updates + NIF re-sort when a status cell changes
         if (Spreadsheet.onStatusChange) {
             Spreadsheet.onStatusChange(() => {
                 computeAndUpdateStats();
                 if (_activeStatFilter && _activeStatFilter !== 'total') {
-                    // Re-apply the active stat filter so the view stays consistent
-                    _filterByStatus(_activeStatFilter);
+                    // Re-apply filters so the view stays consistent
+                    _applyFilters();
                 } else {
                     Spreadsheet.resortEntries(); // Move NIF rows to bottom
                 }

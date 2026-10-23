@@ -22,7 +22,6 @@ const DataStore = (() => {
     let _hasPendingEdits = false;    // true when local edits haven't been confirmed by server
 
     const STORAGE_KEY = 'os_datastore_v3';
-    const CACHE_TTL = 4 * 60 * 60 * 1000;  // 4 hours max cache age
     const MONTHLY_ONLY_FIELDS = new Set(['note1','note2','note3','note4','note5',
                                           'note6','note7','note8','note9','note10',
                                           'due_months','star_note','row_color']);
@@ -365,25 +364,12 @@ const DataStore = (() => {
             if (!raw) return false;
             const data = JSON.parse(raw);
             
-            // Don't use stale data (older than CACHE_TTL — 4 hours)
-            if (Date.now() - (data.savedAt || 0) > CACHE_TTL) {
-                localStorage.removeItem(STORAGE_KEY);
-                return false;
-            }
-
-            // Invalidate cache if the month has changed since it was saved
-            // (e.g. cache from September should not be used in October)
-            const now = new Date();
-            const currentMonth = now.getMonth() + 1;
-            const currentYear = now.getFullYear();
-            if (data.savedMonth && data.savedYear) {
-                if (data.savedMonth !== currentMonth || data.savedYear !== currentYear) {
-                    console.info('DataStore: cache invalidated — month changed from',
-                        data.savedMonth + '/' + data.savedYear, 'to', currentMonth + '/' + currentYear);
-                    localStorage.removeItem(STORAGE_KEY);
-                    return false;
-                }
-            }
+            // Offline-first: always load cached data regardless of age.
+            // Server sync will replace with fresh data when online.
+            // Log cache age for diagnostics only.
+            const ageMs = Date.now() - (data.savedAt || 0);
+            const ageHours = (ageMs / 3600000).toFixed(1);
+            console.info(`DataStore: loaded cache (${ageHours}h old, saved ${data.savedMonth || '?'}/${data.savedYear || '?'})`);
             
             _policies = data.policies || [];
             _monthlyOverlays = data.monthlyOverlays || {};
@@ -392,6 +378,7 @@ const DataStore = (() => {
             _lastServerSync = data.lastServerSync || 0;
             rebuildIndex();
             _ready = true;
+            _bulkLoaded = Object.keys(_monthlyOverlays).length > 0;
             return true;
         } catch (e) {
             console.warn('DataStore: loadFromLocal failed', e);
