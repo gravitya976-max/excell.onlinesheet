@@ -414,6 +414,13 @@ def service_worker():
 @app.get("/")
 def root():
     content = open(os.path.join(BASE_DIR, "index.html"), encoding="utf-8").read()
+    # Dynamically inject the current month so the label is correct
+    # even before JavaScript executes
+    now = datetime.now()
+    _mnames = ["", "January", "February", "March", "April", "May", "June",
+               "July", "August", "September", "October", "November", "December"]
+    current_label = f"{_mnames[now.month]} {now.year}"
+    content = content.replace("Loading\u2026", current_label)
     return HTMLResponse(
         content=content,
         headers={

@@ -1011,6 +1011,9 @@ const Spreadsheet = (() => {
         // Clear any stale selections left by virtual scroller re-rendering
         document.querySelectorAll('.nav-selected').forEach(el => el.classList.remove('nav-selected'));
         document.querySelectorAll('.nav-active-row').forEach(el => el.classList.remove('nav-active-row'));
+        // Always remove nav-has-selection from ALL tables — fixes stuck hover suppression
+        // when virtual scroller detaches the selected cell from the DOM
+        document.querySelectorAll('.nav-has-selection').forEach(el => el.classList.remove('nav-has-selection'));
         _isEditing = false;
     }
 

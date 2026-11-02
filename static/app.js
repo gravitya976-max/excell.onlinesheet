@@ -779,12 +779,12 @@ const App = (() => {
             });
         }
 
-        // ── ONE-TIME CACHE CLEANUP (v3.8.0 migration) ─────────────────
+        // ── ONE-TIME CACHE CLEANUP (v3.8.2 — force month fix) ─────────────────
         // Nuclear option: wipe ALL old caches so no stale data persists.
         // Runs once per version, then sets a flag so it won't run again.
-        const CACHE_BUST_KEY = 'os_cache_bust_v380';
+        const CACHE_BUST_KEY = 'os_cache_bust_v382';
         if (!localStorage.getItem(CACHE_BUST_KEY)) {
-            console.info('🧹 v3.8.0 cache cleanup: wiping all stale data');
+            console.info('🧹 v3.8.2 cache cleanup: wiping all stale data');
             // 1. Clear ALL localStorage items for this app
             ['os_datastore_v1', 'os_datastore_v2', 'os_datastore_v3'].forEach(k => {
                 try { localStorage.removeItem(k); } catch(_){}
