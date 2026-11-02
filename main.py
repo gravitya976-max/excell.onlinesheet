@@ -4,7 +4,7 @@ Upload Excel sheets → Master Data → Generate Monthly Due Lists.
 Local dev: SQLite file. Production (Render): Turso cloud via libsql-experimental.
 """
 
-import os, json, sqlite3, math, asyncio, logging
+import os, json, sqlite3, math, asyncio, logging, re, hashlib, glob
 from datetime import datetime, date
 
 log = logging.getLogger("online_sheet")
@@ -401,12 +401,25 @@ def upsert_master(records):
 
 @app.get("/sw.js")
 def service_worker():
-    """Serve SW with no-cache so browsers always check for updates."""
+    """Serve SW with no-cache so browsers always check for updates.
+    Injects a dynamic build hash so the SW version auto-updates
+    whenever any source file changes — no manual version bumps needed."""
     from fastapi.responses import Response
     sw_path = os.path.join(BASE_DIR, "sw.js")
-    content = open(sw_path, encoding="utf-8").read()
+    sw_content = open(sw_path, encoding="utf-8").read()
+    # Auto-generate build hash from all source file modification times
+    static_dir = os.path.join(BASE_DIR, "static")
+    mtimes = []
+    for f in sorted(glob.glob(os.path.join(static_dir, "*"))):
+        mtimes.append(str(os.path.getmtime(f)))
+    # Include sw.js and index.html mtimes too
+    for f in [os.path.join(BASE_DIR, "index.html"), sw_path, __file__]:
+        if os.path.exists(f):
+            mtimes.append(str(os.path.getmtime(f)))
+    build_hash = hashlib.md5("|".join(mtimes).encode()).hexdigest()[:10]
+    sw_content = sw_content.replace("__BUILD_HASH__", build_hash)
     return Response(
-        content=content,
+        content=sw_content,
         media_type="application/javascript",
         headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Service-Worker-Allowed": "/"}
     )
@@ -421,6 +434,15 @@ def root():
                "July", "August", "September", "October", "November", "December"]
     current_label = f"{_mnames[now.month]} {now.year}"
     content = content.replace("Loading…", current_label)
+    # Auto cache-bust: replace static ?v=XX on JS/CSS with file mtime
+    # so browsers always fetch the latest version after any deploy
+    def _auto_version(m):
+        filepath = os.path.join(BASE_DIR, m.group(1).lstrip("/"))
+        if os.path.exists(filepath):
+            h = hashlib.md5(str(os.path.getmtime(filepath)).encode()).hexdigest()[:8]
+            return f'{m.group(1)}?v={h}"'
+        return m.group(0)
+    content = re.sub(r'(/static/[^"?]+)\?v=[^"]*"', _auto_version, content)
     return HTMLResponse(
         content=content,
         headers={
