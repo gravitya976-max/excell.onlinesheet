@@ -1,6 +1,6 @@
 // Service Worker — Online Sheet
 // Version string changes force cache invalidation on deploy
-const CACHE_VERSION = 'v3-' + '20261102';
+const CACHE_VERSION = 'v3-' + '20261102b';
 const CACHE_NAME = 'os-cache-' + CACHE_VERSION;
 
 self.addEventListener('install', (e) => {

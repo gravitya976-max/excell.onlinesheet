@@ -420,7 +420,7 @@ def root():
     _mnames = ["", "January", "February", "March", "April", "May", "June",
                "July", "August", "September", "October", "November", "December"]
     current_label = f"{_mnames[now.month]} {now.year}"
-    content = content.replace("Loading\u2026", current_label)
+    content = content.replace("Loading…", current_label)
     return HTMLResponse(
         content=content,
         headers={
