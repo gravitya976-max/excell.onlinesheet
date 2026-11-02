@@ -434,6 +434,17 @@ def root():
                "July", "August", "September", "October", "November", "December"]
     current_label = f"{_mnames[now.month]} {now.year}"
     content = content.replace("Loading…", current_label)
+    # Inject app version into inline script for version-based cache nuke
+    # Uses same build hash as SW so version changes are always detected
+    static_dir = os.path.join(BASE_DIR, "static")
+    mtimes = []
+    for f in sorted(glob.glob(os.path.join(static_dir, "*"))):
+        mtimes.append(str(os.path.getmtime(f)))
+    for f in [os.path.join(BASE_DIR, "index.html"), os.path.join(BASE_DIR, "sw.js"), __file__]:
+        if os.path.exists(f):
+            mtimes.append(str(os.path.getmtime(f)))
+    build_hash = hashlib.md5("|".join(mtimes).encode()).hexdigest()[:10]
+    content = content.replace("__APP_VERSION__", build_hash)
     # Auto cache-bust: replace static ?v=XX on JS/CSS with file mtime
     # so browsers always fetch the latest version after any deploy
     def _auto_version(m):

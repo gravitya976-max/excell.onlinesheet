@@ -35,7 +35,7 @@
                 </svg>
                 <div>
                     <div class="brand-name">Online Sheet</div>
-                    <div class="brand-version">Version 3.8.5</div>
+                    <div class="brand-version">Version 3.9.0</div>
                 </div>
             </div>
             <nav class="tabs desktop-only">
@@ -386,6 +386,75 @@
 
     <!-- Toast Container -->
     <div id="toast-container"></div>
+
+    <!-- Inline: force correct month + cache nuke — runs before any external JS -->
+    <script>
+    (function() {
+        // 1. Immediately set the correct month label (can't be cached wrong)
+        var months = ['','January','February','March','April','May','June',
+                      'July','August','September','October','November','December'];
+        var now = new Date();
+        var label = months[now.getMonth() + 1] + ' ' + now.getFullYear();
+        document.addEventListener('DOMContentLoaded', function() {
+            var el = document.getElementById('current-month-label');
+            if (el) el.textContent = label;
+            var mel = document.getElementById('mobile-month-label');
+            if (mel) mel.textContent = label;
+        });
+
+        // 2. Version-based cache nuke: if cached version doesn't match,
+        //    wipe EVERYTHING and force reload
+        // 3. Triple-click version badge to manually clear all caches
+        document.addEventListener('DOMContentLoaded', function() {
+            var badge = document.querySelector('.brand-version');
+            if (badge) {
+                var clicks = 0, timer;
+                badge.addEventListener('click', function() {
+                    clicks++;
+                    clearTimeout(timer);
+                    if (clicks >= 3) {
+                        clicks = 0;
+                        if (confirm('Clear all cached data and reload?')) {
+                            localStorage.clear();
+                            if ('caches' in window) caches.keys().then(function(k) { k.forEach(function(n) { caches.delete(n); }); });
+                            if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(function(r) { r.forEach(function(sw) { sw.unregister(); }); });
+                            window.location.reload(true);
+                        }
+                    }
+                    timer = setTimeout(function() { clicks = 0; }, 600);
+                });
+            }
+        });
+
+        var CURRENT_VERSION = '__APP_VERSION__';
+        var storedVersion = localStorage.getItem('os_app_version');
+        if (!storedVersion || storedVersion !== CURRENT_VERSION) {
+            console.info('Version update: ' + (storedVersion||'none') + ' -> ' + CURRENT_VERSION + ', nuking caches');
+            // Clear all Cache API caches
+            if ('caches' in window) {
+                caches.keys().then(function(keys) {
+                    return Promise.all(keys.map(function(k) { return caches.delete(k); }));
+                });
+            }
+            // Unregister all service workers
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistrations().then(function(regs) {
+                    regs.forEach(function(r) { r.unregister(); });
+                });
+            }
+            // Clear old datastore caches
+            ['os_datastore_v1','os_datastore_v2','os_datastore_v3'].forEach(function(k) {
+                try { localStorage.removeItem(k); } catch(e) {}
+            });
+            // Save version BEFORE reload so we don't loop
+            localStorage.setItem('os_app_version', CURRENT_VERSION);
+            // Force reload to pick up fresh files after cache nuke
+            setTimeout(function() { window.location.reload(true); }, 500);
+            return; // stop executing — page will reload
+        }
+        localStorage.setItem('os_app_version', CURRENT_VERSION);
+    })();
+    </script>
 
     <script src="/static/datastore.js?v=90"></script>
     <script src="/static/virtual-scroller.js?v=95"></script>
