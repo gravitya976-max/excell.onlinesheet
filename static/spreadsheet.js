@@ -524,13 +524,16 @@ const Spreadsheet = (() => {
                     dot.style.backgroundColor = ROW_COLORS[_activeColorKey];
                 }
                 dot.addEventListener('click', (e) => {
-                    if (!_activeColorKey) return; // no color mode — don't intercept
+                    console.log('[DOT-CLICK] _activeColorKey=', _activeColorKey, 'entryId=', entryId);
+                    if (!_activeColorKey) { console.log('[DOT-CLICK] no active color key, bail'); return; }
                     e.stopPropagation();
                     e.preventDefault();
                     const oldColor = entry.row_color || '';
                     const newColor = (_activeColorKey === '__clear__') ? '' :
                         (oldColor === _activeColorKey) ? '' : _activeColorKey;
+                    console.log('[DOT-CLICK] old=', oldColor, 'new=', newColor, 'tr.isConnected=', tr.isConnected);
                     applyRowColor(tr, entry, entryId, newColor, oldColor);
+                    console.log('[DOT-CLICK] after apply, tr.dataset.rowColor=', tr.dataset.rowColor);
                 });
                 td.appendChild(dot);
 
@@ -599,6 +602,8 @@ const Spreadsheet = (() => {
 
     /* ── Row Color helpers ────────────────────────────────────────────── */
     function applyRowColor(tr, entry, entryId, newColor, oldColor) {
+        console.log('[APPLY-ROW-COLOR] entryId=', entryId, 'newColor=', newColor, 'oldColor=', oldColor);
+        console.log('[APPLY-ROW-COLOR] ROW_COLORS[newColor]=', ROW_COLORS[newColor], 'tr=', tr, 'tr.parentNode=', tr.parentNode);
         entry.row_color = newColor;
 
         // Update visual via data attribute (CSS handles background + hover)
@@ -635,6 +640,7 @@ const Spreadsheet = (() => {
     }
 
     function setActiveColorKey(key) {
+        console.log('[SET-COLOR-KEY] key=', key, '-> _activeColorKey will be:', key || null);
         _activeColorKey = key || null;
         // Refresh visible rows to update dot colors
         VirtualScroller.refreshAllRows();
