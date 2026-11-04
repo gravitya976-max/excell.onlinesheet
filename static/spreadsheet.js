@@ -608,11 +608,26 @@ const Spreadsheet = (() => {
             delete tr.dataset.rowColor;
         }
 
+        // Also update all tds in this row to force background refresh
+        tr.querySelectorAll('td').forEach(td => {
+            td.style.backgroundColor = '';  // clear any inline override
+        });
+
         // Persist — use App.updateEntry directly (avoids saveCell's DOM dependency)
         if (App.state.activeTab === 'master') {
             App.updateMasterEntry(entryId, 'row_color', newColor);
         } else {
             App.updateEntry(entryId, 'row_color', newColor);
+        }
+
+        // Sync the color change to VirtualScroller's internal data
+        // so scrolling/re-renders preserve the color
+        VirtualScroller.updateFieldByEntryId(entryId, 'row_color', newColor);
+
+        // Refresh the specific row in virtual scroller to ensure visual consistency
+        const vsIdx = tr.dataset.vsIdx;
+        if (vsIdx !== undefined) {
+            VirtualScroller.updateRow(parseInt(vsIdx));
         }
 
         // Undo support

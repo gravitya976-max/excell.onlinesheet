@@ -2013,7 +2013,7 @@ body.crm-call-active .crm-call-icon:active {
     padding: 0;
     transition: transform 0.12s, border-color 0.15s, box-shadow 0.15s;
     flex-shrink: 0;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06), 0 0 0 1.5px #ffffff;
 }
 
 .color-swatch:hover {
@@ -2058,8 +2058,8 @@ body.color-mode-active .row-color-dot {
     transition: opacity 0.12s, transform 0.1s;
     z-index: 10;
     padding: 0;
-    border: 1px solid rgba(0,0,0,0.12);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    border: 1.5px solid #ffffff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
 
 body.color-mode-active td:hover > .row-color-dot {
