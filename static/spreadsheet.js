@@ -514,28 +514,27 @@ const Spreadsheet = (() => {
                 }
                 td.appendChild(span);
 
-                // Color paint dot — on EVERY editable cell (visible on td:hover in color mode)
-                const dot = document.createElement('div');
-                dot.className = 'row-color-dot';
-                if (_activeColorKey === '__clear__') {
-                    dot.style.backgroundColor = '#fff';
-                    dot.style.border = '1px dashed #94a3b8';
-                } else if (_activeColorKey && ROW_COLORS[_activeColorKey]) {
-                    dot.style.backgroundColor = ROW_COLORS[_activeColorKey];
+                // Color paint dot — on EVERY editable cell (visible on td:hover in color mode, non-master only)
+                if (!isMaster) {
+                    const dot = document.createElement('div');
+                    dot.className = 'row-color-dot';
+                    if (_activeColorKey === '__clear__') {
+                        dot.style.backgroundColor = '#fff';
+                        dot.style.border = '1px dashed #94a3b8';
+                    } else if (_activeColorKey && ROW_COLORS[_activeColorKey]) {
+                        dot.style.backgroundColor = ROW_COLORS[_activeColorKey];
+                    }
+                    dot.addEventListener('click', (e) => {
+                        if (!_activeColorKey) return;
+                        e.stopPropagation();
+                        e.preventDefault();
+                        const oldColor = entry.row_color || '';
+                        const newColor = (_activeColorKey === '__clear__') ? '' :
+                            (oldColor === _activeColorKey) ? '' : _activeColorKey;
+                        applyRowColor(tr, entry, entryId, newColor, oldColor);
+                    });
+                    td.appendChild(dot);
                 }
-                dot.addEventListener('click', (e) => {
-                    console.log('[DOT-CLICK] _activeColorKey=', _activeColorKey, 'entryId=', entryId);
-                    if (!_activeColorKey) { console.log('[DOT-CLICK] no active color key, bail'); return; }
-                    e.stopPropagation();
-                    e.preventDefault();
-                    const oldColor = entry.row_color || '';
-                    const newColor = (_activeColorKey === '__clear__') ? '' :
-                        (oldColor === _activeColorKey) ? '' : _activeColorKey;
-                    console.log('[DOT-CLICK] old=', oldColor, 'new=', newColor, 'tr.isConnected=', tr.isConnected);
-                    applyRowColor(tr, entry, entryId, newColor, oldColor);
-                    console.log('[DOT-CLICK] after apply, tr.dataset.rowColor=', tr.dataset.rowColor);
-                });
-                td.appendChild(dot);
 
                 // Phone call icon on mobileno column (visible only in CRM call mode via CSS)
                 if (col.key === 'mobileno' && value) {
@@ -602,8 +601,8 @@ const Spreadsheet = (() => {
 
     /* ── Row Color helpers ────────────────────────────────────────────── */
     function applyRowColor(tr, entry, entryId, newColor, oldColor) {
-        console.log('[APPLY-ROW-COLOR] entryId=', entryId, 'newColor=', newColor, 'oldColor=', oldColor);
-        console.log('[APPLY-ROW-COLOR] ROW_COLORS[newColor]=', ROW_COLORS[newColor], 'tr=', tr, 'tr.parentNode=', tr.parentNode);
+        if (App.state.activeTab === 'master') return; // Master sheet does not accept row coloring
+
         entry.row_color = newColor;
 
         // Update visual via data attribute (CSS handles background + hover)
@@ -618,22 +617,12 @@ const Spreadsheet = (() => {
             td.style.backgroundColor = '';  // clear any inline override
         });
 
-        // Persist — use App.updateEntry directly (avoids saveCell's DOM dependency)
-        if (App.state.activeTab === 'master') {
-            App.updateMasterEntry(entryId, 'row_color', newColor);
-        } else {
-            App.updateEntry(entryId, 'row_color', newColor);
-        }
+        // Persist to monthly entry
+        App.updateEntry(entryId, 'row_color', newColor);
 
-        // Sync the color change to VirtualScroller's internal data
-        // so scrolling/re-renders preserve the color
+        // Sync the color change to VirtualScroller's internal data in memory
+        // so scrolling/re-renders preserve the color without destroying/replacing DOM
         VirtualScroller.updateFieldByEntryId(entryId, 'row_color', newColor);
-
-        // Refresh the specific row in virtual scroller to ensure visual consistency
-        const vsIdx = tr.dataset.vsIdx;
-        if (vsIdx !== undefined) {
-            VirtualScroller.updateRow(parseInt(vsIdx));
-        }
 
         // Undo support
         pushUndo(entryId, 'row_color', oldColor, newColor);

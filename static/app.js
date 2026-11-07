@@ -109,10 +109,13 @@ const App = (() => {
             $('#month-controls').classList.remove('hidden');
             $('#master-info').classList.add('hidden');
             $('#btn-generate').classList.remove('hidden');
+            $('#toolbar-colors')?.classList.remove('hidden');
         } else {
             $('#month-controls').classList.add('hidden');
             $('#master-info').classList.remove('hidden');
             $('#btn-generate').classList.add('hidden');
+            $('#toolbar-colors')?.classList.add('hidden');
+            deactivateColorMode();
         }
         updateMonthLabel();
         renderCurrentView();
@@ -403,7 +406,7 @@ const App = (() => {
     async function updateEntry(entryId, field, value) {
         // Update DataStore immediately (local-first)
         const entries = getEntries();
-        const entry = entries.find(e => (e._monthlyId || e.id) === entryId);
+        const entry = entries.find(e => (e._monthlyId || e.id) == entryId);
         if (entry) {
             const monthKey = `${state.year}-${state.month}`;
             DataStore.updateField('monthly', entry.policyno || entry._masterPolicyno, field, value, monthKey, entryId);
@@ -454,7 +457,7 @@ const App = (() => {
         const table = state.activeTab === 'master' ? 'master' : 'monthly';
         // Find entry before removing
         const entries = getEntries();
-        const entry = entries.find(e => (e._monthlyId || e.id) === entryId);
+        const entry = entries.find(e => (e._monthlyId || e.id) == entryId);
         const pno = entry ? (entry.policyno || entry._masterPolicyno) : '';
 
         // Record deletion in UndoManager (snapshot before removal)

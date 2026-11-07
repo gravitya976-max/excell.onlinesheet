@@ -22,9 +22,7 @@ const DataStore = (() => {
     let _hasPendingEdits = false;    // true when local edits haven't been confirmed by server
 
     const STORAGE_KEY = 'os_datastore_v3';
-    const MONTHLY_ONLY_FIELDS = new Set(['note1','note2','note3','note4','note5',
-                                          'note6','note7','note8','note9','note10',
-                                          'due_months','star_note','row_color']);
+    const MONTHLY_ONLY_FIELDS = new Set(['due_months','row_color']);
 
     // ── Policies index for O(1) lookup ───────────────────────────────
     let _policyIndex = {};  // { policyno: index_in_policies }
@@ -58,11 +56,19 @@ const DataStore = (() => {
 
         // Merge: start with overlay entries (they define which policies appear in this month)
         return overlay.map((ov, idx) => {
-            const master = _policies[_policyIndex[ov.policyno]];
-            // Master fields as base, overlay fields on top
+            const master = _policies[_policyIndex[ov.policyno]] || {};
+            // Carry forward notes & star_note from master if monthly overlay doesn't have them
+            const noteFields = {};
+            for (let i = 1; i <= 10; i++) {
+                const k = `note${i}`;
+                noteFields[k] = (ov[k] !== undefined && ov[k] !== '') ? ov[k] : (master[k] || '');
+            }
+            const starNote = (ov.star_note !== undefined && ov.star_note !== '') ? ov.star_note : (master.star_note || '');
             return {
-                ...(master || {}),        // name, mobile, plan, doc, etc.
-                ...ov,                     // id (monthly), status, notes, fup, fup_day
+                ...master,
+                ...ov,
+                ...noteFields,
+                star_note: starNote,
                 _monthlyId: ov.id,         // monthly_entries.id for API calls
                 _masterPolicyno: ov.policyno,
                 _rowIndex: idx
@@ -236,7 +242,7 @@ const DataStore = (() => {
             // Update the monthly overlay
             const overlay = _monthlyOverlays[monthKey];
             if (overlay) {
-                const entry = overlay.find(e => e.id === entryId || e.policyno === policyno);
+                const entry = overlay.find(e => e.id == entryId || e.policyno === policyno);
                 if (entry) entry[field] = value;
             }
             

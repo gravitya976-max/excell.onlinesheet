@@ -305,7 +305,7 @@ const VirtualScroller = (() => {
     function updateFieldByEntryId(entryId, field, value) {
         if (!_data) return;
         for (let i = 0; i < _data.length; i++) {
-            if ((_data[i]._monthlyId || _data[i].id) === entryId) {
+            if ((_data[i]._monthlyId || _data[i].id) == entryId) {
                 _data[i][field] = value;
                 return;
             }
@@ -313,7 +313,7 @@ const VirtualScroller = (() => {
         // Also check NIF data
         if (_nifData) {
             for (let i = 0; i < _nifData.length; i++) {
-                if ((_nifData[i]._monthlyId || _nifData[i].id) === entryId) {
+                if ((_nifData[i]._monthlyId || _nifData[i].id) == entryId) {
                     _nifData[i][field] = value;
                     return;
                 }

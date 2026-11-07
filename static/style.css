@@ -744,16 +744,16 @@ mark.search-hl {
 }
 
 /* ── Row colors via data attribute (replaces inline styles) ──────── */
-tr[data-row-color="rose"] td { background: #f5d5d5; }
-tr[data-row-color="teal"] td { background: #d5ebe7; }
-tr[data-row-color="lilac"] td { background: #e2d9f0; }
-tr[data-row-color="sand"] td { background: #ede5d8; }
-tr[data-row-color="slate"] td { background: #d9e2ea; }
-tr[data-row-color="blush"] td { background: #ecd8df; }
+.spreadsheet tr[data-row-color="rose"] td { background-color: #f5d5d5 !important; }
+.spreadsheet tr[data-row-color="teal"] td { background-color: #d5ebe7 !important; }
+.spreadsheet tr[data-row-color="lilac"] td { background-color: #e2d9f0 !important; }
+.spreadsheet tr[data-row-color="sand"] td { background-color: #ede5d8 !important; }
+.spreadsheet tr[data-row-color="slate"] td { background-color: #d9e2ea !important; }
+.spreadsheet tr[data-row-color="blush"] td { background-color: #ecd8df !important; }
 
-/* Hover ALWAYS wins over row colors */
+/* Hover on colored rows: maintain row color with subtle shade, NO green override or scroll flicker */
 .spreadsheet tr[data-row-color]:hover td {
-    background: var(--bg-cell-hover) !important;
+    filter: brightness(0.97);
 }
 
 .spreadsheet.nav-has-selection tr:hover td {
@@ -2022,9 +2022,9 @@ body.crm-call-active .crm-call-icon:active {
 }
 
 .color-swatch.active {
-    border-color: #334155;
-    box-shadow: 0 0 0 2px rgba(51,65,85,0.25);
-    transform: scale(1.12);
+    border-color: #ffffff !important;
+    box-shadow: 0 0 0 2px #ffffff, 0 2px 6px rgba(0,0,0,0.25) !important;
+    transform: scale(1.15);
 }
 
 /* White swatch = clear/reset (same as eraser) */
@@ -2168,9 +2168,8 @@ body.color-mode-active .row-color-dot:active {
     pointer-events: none;
 }
 
-/* Hide star indicator in CRM SMS and Call modes */
-.crm-sms-active .star-indicator,
-.crm-call-active .star-indicator {
+/* Hide star indicator in CRM SMS mode (kept visible in Call mode) */
+.crm-sms-active .star-indicator {
     display: none !important;
 }
 

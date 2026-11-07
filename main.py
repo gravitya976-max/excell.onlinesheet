@@ -245,8 +245,11 @@ def init_db():
         for nc in NOTE_COLS + ["due_months", "row_color", "star_note"]:
             if nc not in existing_cols:
                 conn.execute(f"ALTER TABLE monthly_entries ADD COLUMN {nc} TEXT DEFAULT ''")
-        # Migrate master: add star_note if missing
+        # Migrate master: add note1..note10 and star_note if missing
         master_cols = {r["name"] for r in conn.execute("PRAGMA table_info(master_policies)").fetchall()}
+        for nc in NOTE_COLS:
+            if nc not in master_cols:
+                conn.execute(f"ALTER TABLE master_policies ADD COLUMN {nc} TEXT DEFAULT ''")
         if "star_note" not in master_cols:
             conn.execute("ALTER TABLE master_policies ADD COLUMN star_note TEXT DEFAULT ''")
     db_push()
@@ -775,14 +778,18 @@ def generate_list_internal(target_year: int, target_month: int):
                     )
                 else:
                     # New policy — full insert
+                    note_vals = [e.get(c, "") for c in NOTE_COLS]
+                    note_cols_str = ", ".join(NOTE_COLS)
+                    note_qs = ", ".join(["?"] * len(NOTE_COLS))
                     conn.execute(
-                        """INSERT INTO monthly_entries
-                           (list_id,policyno,name,doc,fup,sumass,plan,mode,premium,mobileno,status,fup_day,star_note,updated_at)
-                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        f"""INSERT INTO monthly_entries
+                           (list_id,policyno,name,doc,fup,sumass,plan,mode,premium,mobileno,status,fup_day,star_note,{note_cols_str},updated_at)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,{note_qs},?)""",
                         (list_id, e["policyno"], e.get("name",""), e.get("doc",""),
                          e.get("fup",""), e.get("sumass",""), e.get("plan",""),
                          e.get("mode",""), e.get("premium",""), e.get("mobileno",""),
-                         e.get("status",""), e.get("fup_day",0), e.get("star_note",""), datetime.now().isoformat())
+                         e.get("status",""), e.get("fup_day",0), e.get("star_note",""),
+                         *note_vals, datetime.now().isoformat())
                     )
 
             conn.execute(
@@ -798,14 +805,18 @@ def generate_list_internal(target_year: int, target_month: int):
             list_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
 
             for e in due_entries:
+                note_vals = [e.get(c, "") for c in NOTE_COLS]
+                note_cols_str = ", ".join(NOTE_COLS)
+                note_qs = ", ".join(["?"] * len(NOTE_COLS))
                 conn.execute(
-                    """INSERT INTO monthly_entries
-                       (list_id,policyno,name,doc,fup,sumass,plan,mode,premium,mobileno,status,fup_day,star_note,updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    f"""INSERT INTO monthly_entries
+                       (list_id,policyno,name,doc,fup,sumass,plan,mode,premium,mobileno,status,fup_day,star_note,{note_cols_str},updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,{note_qs},?)""",
                     (list_id, e["policyno"], e.get("name",""), e.get("doc",""),
                      e.get("fup",""), e.get("sumass",""), e.get("plan",""),
                      e.get("mode",""), e.get("premium",""), e.get("mobileno",""),
-                     e.get("status",""), e.get("fup_day",0), e.get("star_note",""), datetime.now().isoformat())
+                     e.get("status",""), e.get("fup_day",0), e.get("star_note",""),
+                     *note_vals, datetime.now().isoformat())
                 )
 
     db_push()
@@ -1052,11 +1063,20 @@ async def update_entry(entry_id: int, request: Request):
                 (policyno, f, val)
             )
 
-        # Star note — sync to master immediately (not queued)
+        # Star note & notes — sync to master immediately (not queued) so they persist forever across all sheets
+        note_sync_cols = [c for c in NOTE_COLS if c in body]
+        sync_updates = [f"{c} = ?" for c in note_sync_cols]
+        sync_params = [body[c] for c in note_sync_cols]
         if "star_note" in body:
+            sync_updates.append("star_note = ?")
+            sync_params.append(body["star_note"])
+        if sync_updates:
+            sync_updates.append("updated_at = ?")
+            sync_params.append(datetime.now().isoformat())
+            sync_params.append(policyno)
             conn.execute(
-                "UPDATE master_policies SET star_note=?, updated_at=? WHERE policyno=?",
-                (body["star_note"], datetime.now().isoformat(), policyno)
+                f"UPDATE master_policies SET {', '.join(sync_updates)} WHERE policyno = ?",
+                sync_params
             )
 
     db_push()
