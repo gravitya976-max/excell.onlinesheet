@@ -310,7 +310,7 @@ def render_overdue_sms(contact: dict) -> str:
     else:
         months_text = f"{count} months"
 
-    name = contact.get("name", "")
+    name = (contact.get("name") or "").strip().upper()
     pno = contact.get("policy_no", "")
 
     amt_str = _format_indian_amount(amount)
@@ -326,9 +326,11 @@ def render_overdue_sms(contact: dict) -> str:
 
 
 def render_blank_sms(contact: dict, template: str) -> str:
-    """Replace tags in user-written template with contact values."""
+    """Replace tags in user-written template with contact values.
+    Customer name is converted to UPPERCASE for custom SMS."""
+    name = (contact.get("name") or "").strip().upper()
     replacements = {
-        "{Name}": contact.get("name", ""),
+        "{Name}": name,
         "{POL-NUM}": contact.get("policy_no", ""),
         "{Premium}": contact.get("premium", ""),
         "{FUP}": contact.get("fup", ""),
@@ -337,7 +339,7 @@ def render_blank_sms(contact: dict, template: str) -> str:
     }
     msg = template
     for tag, val in replacements.items():
-        msg = msg.replace(tag, val)
+        msg = re.sub(re.escape(tag), str(val), msg, flags=re.IGNORECASE)
     return msg
 
 
@@ -353,8 +355,9 @@ async def sms_preview_overdue(request: Request):
     previews = []
     for c in contacts:
         pno = c.get("policy_no", "?")
-        name = c.get("name", "")
-        message = render_overdue_sms(c)
+        name = (c.get("name") or "").strip().upper()
+        c_upper = {**c, "name": name}
+        message = render_overdue_sms(c_upper)
         if message is None:
             previews.append({"policy_no": pno, "name": name, "error": "Missing/invalid due_months"})
         else:
@@ -389,20 +392,23 @@ async def sms_send_custom(request: Request):
             if not mobile_raw:
                 continue
 
+            name = (c.get("name") or "").strip().upper()
+            c_upper = {**c, "name": name}
+
             if template_type == "overdue":
-                message = render_overdue_sms(c)
+                message = render_overdue_sms(c_upper)
                 if message is None:
                     skipped.append(c.get("policy_no", "?"))
                     continue
             else:
-                message = render_blank_sms(c, custom_message)
+                message = render_blank_sms(c_upper, custom_message)
 
             # Split by '/' for dual-number entries
             numbers = [n.strip() for n in mobile_raw.split('/') if n.strip()]
             for num in numbers:
                 conn.execute(
                     "INSERT INTO sms_queue (policy_no, name, mobile, message, batch_id) VALUES (?,?,?,?,?)",
-                    (c.get("policy_no", ""), c.get("name", ""), num, message, batch_id)
+                    (c.get("policy_no", ""), name, num, message, batch_id)
                 )
                 inserted += 1
 

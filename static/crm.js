@@ -1266,8 +1266,9 @@ const CRM = (() => {
                     bubble.textContent = text;
                     return;
                 }
+                const nameUpper = (previewContact.name || '—').toUpperCase();
                 let preview = text
-                    .replace(/\{Name\}/gi, previewContact.name || '—')
+                    .replace(/\{Name\}/gi, nameUpper)
                     .replace(/\{POL-NUM\}/gi, previewContact.policy_no || '—')
                     .replace(/\{Premium\}/gi, previewContact.premium || '—')
                     .replace(/\{FUP\}/gi, previewContact.fup || '—')
