@@ -1043,9 +1043,8 @@ const App = (() => {
                 // Deactivate all swatches
                 allSwatches.forEach(s => s.classList.remove('active'));
 
-                if (wasActive && colorKey !== '__clear__') {
-                    document.body.classList.remove('color-mode-active');
-                    Spreadsheet.setActiveColorKey(null);
+                if (wasActive) {
+                    deactivateColorMode();
                 } else {
                     swatch.classList.add('active');
                     document.body.classList.add('color-mode-active');
@@ -1053,6 +1052,14 @@ const App = (() => {
                 }
             });
         });
+
+        const deselectBtn = $('#btn-color-deselect');
+        if (deselectBtn) {
+            deselectBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                deactivateColorMode();
+            });
+        }
     }
 
     // ── Star Note ─────────────────────────────────────────────────────
