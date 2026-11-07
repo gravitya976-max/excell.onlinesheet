@@ -528,7 +528,7 @@ const CRM = (() => {
         const done = data.done || 0;
         const failed = data.failed || 0;
         const sentToday = data.sent_today || 0;
-        const dailyLimit = data.daily_limit || 50;
+        const dailyLimit = data.daily_limit || 90;
 
         const frag = document.createDocumentFragment();
 
@@ -1612,9 +1612,10 @@ const CRM = (() => {
         if (footer) {
             const remaining = data.daily_remaining ?? '';
             const sentToday = data.sent_today ?? 0;
-            let msg = `Next send in ~60s · Today: ${sentToday}/50`;
+            const dailyLimit = data.daily_limit || 90;
+            let msg = `Next send in ~60s · Today: ${sentToday}/${dailyLimit}`;
             if (remaining <= 0 && data.pending > 0) {
-                msg = `⚠ Daily limit reached (50/day). ${data.pending} queued for tomorrow.`;
+                msg = `⚠ Daily limit reached (${dailyLimit}/day). ${data.pending} queued for tomorrow.`;
             }
             footer.innerHTML = `<div class="crm-countdown">${msg}</div>`;
         }

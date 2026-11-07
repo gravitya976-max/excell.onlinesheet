@@ -30,6 +30,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GATEWAY_API_KEY = os.environ.get("GATEWAY_API_KEY", "dev-gateway-key-change-me")
 HELP_PHONE1     = os.environ.get("HELP_PHONE1", "9228093681")
 HELP_PHONE2     = os.environ.get("HELP_PHONE2", "7984843660")
+DAILY_SMS_LIMIT = int(os.environ.get("DAILY_SMS_LIMIT", "90"))
 
 # ── CRM Database (separate from main online_sheet.db) ───────────────────────────
 TURSO_URL   = os.environ.get("TURSO_DATABASE_URL", "")
@@ -415,17 +416,17 @@ async def sms_send_custom(request: Request):
 @router.get("/api/sms/queue")
 async def sms_queue_poll(x_gateway_key: Optional[str] = Header(None)):
     """Android polls: returns ONE pending job, marks it 'processing'.
-    Rate limits: 60s between sends, max 60 per 24 hours."""
+    Rate limits: 60s between sends, max 90 per 24 hours."""
     verify_gateway_key(x_gateway_key)
 
     with get_crm_db() as conn:
-        # Check daily limit: max 60 SMS per day (resets at midnight IST)
+        # Check daily limit: max 90 SMS per day (resets at midnight IST)
         cutoff = _today_midnight_utc()
         sent_today = conn.execute(
             "SELECT COUNT(*) as cnt FROM sms_logs WHERE sent_at >= ?", (cutoff,)
         ).fetchone()
-        if (sent_today or {}).get("cnt", 0) >= 50:
-            return {"job": None, "reason": "daily_limit", "limit": 50}
+        if (sent_today or {}).get("cnt", 0) >= DAILY_SMS_LIMIT:
+            return {"job": None, "reason": "daily_limit", "limit": DAILY_SMS_LIMIT}
 
         # Check 60-second gap since last send
         last_sent = conn.execute(
@@ -554,8 +555,8 @@ async def sms_queue_status():
         "total": pending + processing, "done": total_sent, "failed": total_failed,
         "processing": processing, "pending": pending,
         "current": current, "items": rows, "logs": log_items,
-        "sent_today": sent_today, "daily_limit": 50,
-        "daily_remaining": max(0, 50 - sent_today)
+        "sent_today": sent_today, "daily_limit": DAILY_SMS_LIMIT,
+        "daily_remaining": max(0, DAILY_SMS_LIMIT - sent_today)
     }
 
 
