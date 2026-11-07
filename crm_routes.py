@@ -31,6 +31,7 @@ GATEWAY_API_KEY = os.environ.get("GATEWAY_API_KEY", "dev-gateway-key-change-me")
 HELP_PHONE1     = os.environ.get("HELP_PHONE1", "9228093681")
 HELP_PHONE2     = os.environ.get("HELP_PHONE2", "7984843660")
 DAILY_SMS_LIMIT = int(os.environ.get("DAILY_SMS_LIMIT", "90"))
+SMS_COOLDOWN_SECONDS = int(os.environ.get("SMS_COOLDOWN_SECONDS", "30"))
 
 # ── CRM Database (separate from main online_sheet.db) ───────────────────────────
 TURSO_URL   = os.environ.get("TURSO_DATABASE_URL", "")
@@ -416,7 +417,7 @@ async def sms_send_custom(request: Request):
 @router.get("/api/sms/queue")
 async def sms_queue_poll(x_gateway_key: Optional[str] = Header(None)):
     """Android polls: returns ONE pending job, marks it 'processing'.
-    Rate limits: 60s between sends, max 90 per 24 hours."""
+    Rate limits: 30s between sends, max 90 per 24 hours."""
     verify_gateway_key(x_gateway_key)
 
     with get_crm_db() as conn:
@@ -428,7 +429,7 @@ async def sms_queue_poll(x_gateway_key: Optional[str] = Header(None)):
         if (sent_today or {}).get("cnt", 0) >= DAILY_SMS_LIMIT:
             return {"job": None, "reason": "daily_limit", "limit": DAILY_SMS_LIMIT}
 
-        # Check 60-second gap since last send
+        # Check cooldown gap since last send (30s)
         last_sent = conn.execute(
             "SELECT sent_at FROM sms_logs ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -437,8 +438,8 @@ async def sms_queue_poll(x_gateway_key: Optional[str] = Header(None)):
                 ts = last_sent["sent_at"]
                 ls_dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S") if " " in ts else datetime.fromisoformat(ts.replace("Z", "+00:00"))
                 elapsed = (datetime.utcnow() - ls_dt).total_seconds()
-                if elapsed < 60:
-                    return {"job": None, "reason": "cooldown", "wait": int(60 - elapsed)}
+                if elapsed < SMS_COOLDOWN_SECONDS:
+                    return {"job": None, "reason": "cooldown", "wait": int(SMS_COOLDOWN_SECONDS - elapsed)}
             except Exception:
                 pass
 
@@ -556,7 +557,8 @@ async def sms_queue_status():
         "processing": processing, "pending": pending,
         "current": current, "items": rows, "logs": log_items,
         "sent_today": sent_today, "daily_limit": DAILY_SMS_LIMIT,
-        "daily_remaining": max(0, DAILY_SMS_LIMIT - sent_today)
+        "daily_remaining": max(0, DAILY_SMS_LIMIT - sent_today),
+        "cooldown_seconds": SMS_COOLDOWN_SECONDS
     }
 
 

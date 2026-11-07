@@ -1613,7 +1613,8 @@ const CRM = (() => {
             const remaining = data.daily_remaining ?? '';
             const sentToday = data.sent_today ?? 0;
             const dailyLimit = data.daily_limit || 90;
-            let msg = `Next send in ~60s · Today: ${sentToday}/${dailyLimit}`;
+            const cooldown = data.cooldown_seconds || 30;
+            let msg = `Next send in ~${cooldown}s · Today: ${sentToday}/${dailyLimit}`;
             if (remaining <= 0 && data.pending > 0) {
                 msg = `⚠ Daily limit reached (${dailyLimit}/day). ${data.pending} queued for tomorrow.`;
             }
