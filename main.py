@@ -333,6 +333,14 @@ from data_processor import (
     is_due_in_month, calc_fup_for_month, status_for_list, parse_date
 )
 
+# ── Name normalisation: Title Case ─────────────────────────────────────────────
+
+def title_case(name: str) -> str:
+    """'pushpa raj' → 'Pushpa Raj', 'RAVI KUMAR' → 'Ravi Kumar'."""
+    if not name or not name.strip():
+        return name or ""
+    return " ".join(w.capitalize() for w in name.split())
+
 # ── Master data upsert ─────────────────────────────────────────────────────────
 
 def upsert_master(records):
@@ -356,6 +364,10 @@ def upsert_master(records):
             pno = rec.get("policyno")
             if not pno:
                 continue
+
+            # Title-case the name on import
+            if rec.get("name"):
+                rec["name"] = title_case(rec["name"])
 
             existing = existing_map.get(pno)
             if existing:
@@ -612,6 +624,10 @@ async def update_master_entry(entry_id: int, request: Request):
     # Cannot change id, updated_at
     for k in ("id", "updated_at"):
         body.pop(k, None)
+
+    # Title-case name on edit
+    if "name" in body and body["name"]:
+        body["name"] = title_case(body["name"])
 
     new_policyno = body.pop("policyno", None)
 
@@ -890,6 +906,10 @@ async def create_master_policy(request: Request):
     if not pno:
         raise HTTPException(400, "policyno is required.")
 
+    # Title-case name
+    if body.get("name"):
+        body["name"] = title_case(body["name"])
+
     master_fields = ["name", "doc", "fup", "sumass", "plan", "mode", "premium", "mobileno", "status"]
     now_str = datetime.now().isoformat()
 
@@ -946,6 +966,10 @@ async def add_policy(request: Request):
     pno = (body.get("policyno") or "").strip()
     if not pno:
         raise HTTPException(400, "policyno is required.")
+
+    # Title-case name
+    if body.get("name"):
+        body["name"] = title_case(body["name"])
 
     master_fields = ["name", "doc", "fup", "sumass", "plan", "mode", "premium", "mobileno", "status"]
     now_str = datetime.now().isoformat()
@@ -1040,6 +1064,10 @@ async def create_monthly_entry(year: int, month: int, request: Request):
     if not pno:
         raise HTTPException(400, "policyno is required.")
 
+    # Title-case name
+    if body.get("name"):
+        body["name"] = title_case(body["name"])
+
     master_fields = ["name", "doc", "fup", "sumass", "plan", "mode", "premium", "mobileno", "status"]
     now_str = datetime.now().isoformat()
 
@@ -1126,6 +1154,10 @@ async def update_entry(entry_id: int, request: Request):
     # Cannot change policyno, id, list_id
     for k in ("policyno", "id", "list_id", "fup_day", "updated_at"):
         body.pop(k, None)
+
+    # Title-case name on edit
+    if "name" in body and body["name"]:
+        body["name"] = title_case(body["name"])
 
     master_fields = ["name", "doc", "fup", "sumass", "plan", "mode", "premium", "mobileno", "status"]
     allowed = master_fields + NOTE_COLS + ["due_months", "row_color", "star_note"]  # note1-note10 + due_months + row_color + star_note
