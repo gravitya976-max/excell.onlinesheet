@@ -747,25 +747,31 @@ def generate_list_internal(target_year: int, target_month: int):
             # ── REFRESH MODE: UPSERT — preserve notes, status ──
             list_id = existing["id"]
 
-            # 1) Remove entries whose policyno was deleted from master
-            orphans = conn.execute(
+            # 1) Fetch ALL existing monthly entries for this list in ONE query
+            all_monthly = conn.execute(
                 "SELECT id, policyno FROM monthly_entries WHERE list_id=?", (list_id,)
             ).fetchall()
-            for o in orphans:
-                if o["policyno"] not in master_policynos:
-                    conn.execute("DELETE FROM monthly_entries WHERE id=?", (o["id"],))
+            existing_map = {row["policyno"]: row["id"] for row in all_monthly}
+
+            # 2) Remove entries whose policyno was deleted from master
+            for pno_monthly, mid in existing_map.items():
+                if pno_monthly not in master_policynos:
+                    conn.execute("DELETE FROM monthly_entries WHERE id=?", (mid,))
                     removed_count += 1
 
-            # 2) UPSERT: update master-synced fields, preserve notes/status/fup_day edits
-            for e in due_entries:
-                existing_entry = conn.execute(
-                    "SELECT id FROM monthly_entries WHERE list_id=? AND policyno=?",
-                    (list_id, e["policyno"])
-                ).fetchone()
+            # 3) UPSERT: batch all updates/inserts — no individual SELECTs
+            now_str = datetime.now().isoformat()
+            batch_stmts = []
+            due_pnos = set()
 
-                if existing_entry:
+            for e in due_entries:
+                pno = e["policyno"]
+                due_pnos.add(pno)
+                eid = existing_map.get(pno)
+
+                if eid:
                     # Update only master-synced fields (NOT status, notes, row_color)
-                    conn.execute(
+                    batch_stmts.append((
                         """UPDATE monthly_entries 
                            SET name=?, doc=?, fup=?, sumass=?, plan=?, mode=?,
                                premium=?, mobileno=?, fup_day=?, star_note=?, updated_at=?
@@ -773,28 +779,35 @@ def generate_list_internal(target_year: int, target_month: int):
                         (e.get("name",""), e.get("doc",""), e.get("fup",""),
                          e.get("sumass",""), e.get("plan",""), e.get("mode",""),
                          e.get("premium",""), e.get("mobileno",""),
-                         e.get("fup_day",0), e.get("star_note",""), datetime.now().isoformat(),
-                         existing_entry["id"])
-                    )
+                         e.get("fup_day",0), e.get("star_note",""), now_str, eid)
+                    ))
                 else:
                     # New policy — full insert
                     note_vals = [e.get(c, "") for c in NOTE_COLS]
                     note_cols_str = ", ".join(NOTE_COLS)
                     note_qs = ", ".join(["?"] * len(NOTE_COLS))
-                    conn.execute(
+                    batch_stmts.append((
                         f"""INSERT INTO monthly_entries
                            (list_id,policyno,name,doc,fup,sumass,plan,mode,premium,mobileno,status,fup_day,star_note,{note_cols_str},updated_at)
                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,{note_qs},?)""",
-                        (list_id, e["policyno"], e.get("name",""), e.get("doc",""),
+                        (list_id, pno, e.get("name",""), e.get("doc",""),
                          e.get("fup",""), e.get("sumass",""), e.get("plan",""),
                          e.get("mode",""), e.get("premium",""), e.get("mobileno",""),
                          e.get("status",""), e.get("fup_day",0), e.get("star_note",""),
-                         *note_vals, datetime.now().isoformat())
-                    )
+                         *note_vals, now_str)
+                    ))
+
+            # Execute all in one batch (Turso: 1 HTTP request; SQLite: loop)
+            if batch_stmts:
+                if USE_TURSO and hasattr(conn, 'execute_batch'):
+                    conn.execute_batch(batch_stmts)
+                else:
+                    for sql, params in batch_stmts:
+                        conn.execute(sql, params)
 
             conn.execute(
                 "UPDATE monthly_lists SET generated_at=?, source_total=?, filtered_count=? WHERE id=?",
-                (datetime.now().isoformat(), source_total, len(due_entries), list_id)
+                (now_str, source_total, len(due_entries), list_id)
             )
         else:
             # ── GENERATE MODE: fresh insert ──
@@ -916,6 +929,101 @@ async def create_master_policy(request: Request):
 
     db_push()
     return {"message": f"Policy {action}.", "policyno": pno, "action": action}
+
+
+# ── Add single policy + auto-add to monthly if due ────────────────────────────
+
+@app.post("/api/master/add-policy")
+async def add_policy(request: Request):
+    """Add a single policy to master_policies and auto-add to current month's
+    monthly list if the policy is due this month. Returns the new entry data
+    so the frontend can update instantly without a full refresh."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON.")
+
+    pno = (body.get("policyno") or "").strip()
+    if not pno:
+        raise HTTPException(400, "policyno is required.")
+
+    master_fields = ["name", "doc", "fup", "sumass", "plan", "mode", "premium", "mobileno", "status"]
+    now_str = datetime.now().isoformat()
+
+    with get_db() as conn:
+        # Check for duplicate
+        existing = conn.execute(
+            "SELECT id FROM master_policies WHERE policyno=?", (pno,)
+        ).fetchone()
+        if existing:
+            raise HTTPException(409, f"Policy {pno} already exists in master data.")
+
+        # Insert into master
+        vals = {f: body.get(f) for f in master_fields}
+        vals["policyno"] = pno
+        vals["updated_at"] = now_str
+        cols = [k for k in vals if vals[k] is not None]
+        conn.execute(
+            f"INSERT INTO master_policies ({','.join(cols)}) VALUES ({','.join('?' for _ in cols)})",
+            [vals[c] for c in cols]
+        )
+        master_id = conn.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
+
+        # Check if due in current month
+        now = date.today()
+        doc_str = body.get("doc") or ""
+        mode_str = body.get("mode") or ""
+        added_to_monthly = False
+        monthly_entry = None
+
+        if doc_str and mode_str and is_due_in_month(doc_str, mode_str, now.year, now.month):
+            # Check if monthly list exists for this month
+            list_row = conn.execute(
+                "SELECT id FROM monthly_lists WHERE year=? AND month=?", (now.year, now.month)
+            ).fetchone()
+
+            if list_row:
+                list_id = list_row["id"]
+                # Calculate FUP
+                fup = calc_fup_for_month(doc_str, now.year, now.month)
+                fup_day = parse_date(fup).day if fup and parse_date(fup) else 0
+                status = status_for_list(body.get("status", ""))
+
+                note_vals = [""] * len(NOTE_COLS)
+                note_cols_str = ", ".join(NOTE_COLS)
+                note_qs = ", ".join(["?"] * len(NOTE_COLS))
+                conn.execute(
+                    f"""INSERT INTO monthly_entries
+                       (list_id,policyno,name,doc,fup,sumass,plan,mode,premium,mobileno,status,fup_day,star_note,{note_cols_str},updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,{note_qs},?)""",
+                    (list_id, pno, body.get("name",""), doc_str,
+                     fup or "", body.get("sumass",""), body.get("plan",""),
+                     mode_str, body.get("premium",""), body.get("mobileno",""),
+                     status, fup_day, "",
+                     *note_vals, now_str)
+                )
+                monthly_id = conn.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
+                added_to_monthly = True
+                monthly_entry = {
+                    "id": monthly_id, "_monthlyId": monthly_id,
+                    "list_id": list_id, "policyno": pno,
+                    "name": body.get("name",""), "doc": doc_str,
+                    "fup": fup or "", "sumass": body.get("sumass",""),
+                    "plan": body.get("plan",""), "mode": mode_str,
+                    "premium": body.get("premium",""), "mobileno": body.get("mobileno",""),
+                    "status": status, "fup_day": fup_day, "star_note": "",
+                }
+                for nc in NOTE_COLS:
+                    monthly_entry[nc] = ""
+
+    db_push()
+    return {
+        "message": "Policy added.",
+        "policyno": pno,
+        "master_id": master_id,
+        "added_to_monthly": added_to_monthly,
+        "monthly_entry": monthly_entry,
+    }
 
 
 # ── Add single entry to monthly list (auto-syncs to master) ───────────────────

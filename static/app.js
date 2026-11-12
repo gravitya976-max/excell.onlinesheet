@@ -695,6 +695,68 @@ const App = (() => {
         });
     }
 
+    // ── Add Policy (modal) ──────────────────────────────────────────
+    function openAddPolicy() {
+        // Clear all fields
+        ['policyno','name','doc','mode','sumass','plan','premium','mobileno','status'].forEach(f => {
+            const el = document.getElementById('add-policy-' + f);
+            if (el) el.value = '';
+        });
+        $('#add-policy-overlay').classList.remove('hidden');
+        setTimeout(() => document.getElementById('add-policy-policyno').focus(), 100);
+    }
+
+    function closeAddPolicy() {
+        $('#add-policy-overlay').classList.add('hidden');
+    }
+
+    async function saveAddPolicy() {
+        const pno = document.getElementById('add-policy-policyno').value.trim();
+        if (!pno) {
+            toast('Policy number is required', 'error');
+            return;
+        }
+
+        const body = {
+            policyno: pno,
+            name: document.getElementById('add-policy-name').value.trim(),
+            doc: document.getElementById('add-policy-doc').value.trim(),
+            mode: document.getElementById('add-policy-mode').value.trim(),
+            sumass: document.getElementById('add-policy-sumass').value.trim(),
+            plan: document.getElementById('add-policy-plan').value.trim(),
+            premium: document.getElementById('add-policy-premium').value.trim(),
+            mobileno: document.getElementById('add-policy-mobileno').value.trim(),
+            status: document.getElementById('add-policy-status').value.trim(),
+        };
+
+        closeAddPolicy();
+        showLoading('Adding policy...');
+        try {
+            const resp = await api('POST', '/api/master/add-policy', body);
+            let msg = `Added: ${resp.policyno}`;
+            if (resp.added_to_monthly) {
+                msg += ` (added to ${MONTH_NAMES[state.month]} list)`;
+            }
+            toast(msg, 'success', 4000);
+
+            // Update DataStore immediately — add to master
+            const masterEntry = { ...body, id: resp.master_id || Date.now() };
+            DataStore.addEntry('master', masterEntry);
+
+            // If added to monthly, add there too
+            if (resp.added_to_monthly && resp.monthly_entry) {
+                const monthKey = `${state.year}-${state.month}`;
+                DataStore.addEntry('monthly', resp.monthly_entry, monthKey);
+            }
+
+            renderCurrentView();
+            refreshMasterCount();
+        } catch (e) {
+            toast(`Add failed: ${e.message}`, 'error');
+        }
+        hideLoading();
+    }
+
     // ── Init ──────────────────────────────────────────────────────────
     function init() {
         updateMonthLabel();
@@ -736,6 +798,22 @@ const App = (() => {
             e.preventDefault(); dz.classList.remove('dragover');
             handleFiles(e.dataTransfer.files);
         });
+
+        // Add Policy
+        $('#btn-add-policy').addEventListener('click', openAddPolicy);
+        $('#btn-close-add-policy').addEventListener('click', closeAddPolicy);
+        $('#btn-add-policy-cancel').addEventListener('click', closeAddPolicy);
+        $('#btn-add-policy-save').addEventListener('click', saveAddPolicy);
+        $('#add-policy-overlay').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeAddPolicy();
+        });
+        const addPolicyModal = $('#add-policy-overlay');
+        if (addPolicyModal) {
+            addPolicyModal.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); saveAddPolicy(); }
+                if (e.key === 'Escape') closeAddPolicy();
+            });
+        }
 
         // Search – always read live input value when debounce fires
         const searchInput = $('#search-input');
@@ -1001,6 +1079,10 @@ const App = (() => {
             const mobileUpload = $('#mobile-btn-upload');
             if (mobileUpload) mobileUpload.addEventListener('click', openUpload);
 
+            // Mobile add policy button
+            const mobileAddPolicy = $('#mobile-btn-add-policy');
+            if (mobileAddPolicy) mobileAddPolicy.addEventListener('click', openAddPolicy);
+
             // Undo/Redo FABs
             const undoBtn = $('#btn-mobile-undo');
             const redoBtn = $('#btn-mobile-redo');
@@ -1257,6 +1339,7 @@ const App = (() => {
         getEntries,
         getFilterText,
         openEditMaster,
+        openAddPolicy,
         showStarNoteDetail,
         parseStarNote,
         applyFilter,

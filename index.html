@@ -35,7 +35,7 @@
                 </svg>
                 <div>
                     <div class="brand-name">Online Sheet</div>
-                    <div class="brand-version">Version 3.9.7</div>
+                    <div class="brand-version">Version 3.9.8</div>
                 </div>
             </div>
             <nav class="tabs desktop-only">
@@ -69,6 +69,13 @@
                     <polyline points="8 16 12 12 16 16" />
                 </svg>
                 Upload data
+            </button>
+            <button id="btn-add-policy" class="action-btn" type="button" title="Add single policy">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                Add policy
             </button>
         </div>
         <!-- Hamburger button (mobile only) -->
@@ -107,6 +114,13 @@
                     <polyline points="8 16 12 12 16 16" />
                 </svg>
                 Upload
+            </button>
+            <button id="mobile-btn-add-policy" class="mobile-menu-item action-btn" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                Add policy
             </button>
         </div>
     </div>
@@ -379,6 +393,65 @@
                 <div class="form-actions">
                     <button id="btn-edit-master-cancel" class="btn btn-secondary">Cancel</button>
                     <button id="btn-edit-master-save" class="btn btn-primary">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Policy Modal -->
+    <div id="add-policy-overlay" class="modal-overlay hidden">
+        <div class="modal modal-edit-master" role="dialog" aria-label="Add Policy">
+            <div class="modal-header">
+                <h2>Add Policy</h2>
+                <button id="btn-close-add-policy" class="icon-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body edit-master-body">
+                <div class="edit-master-grid">
+                    <div class="edit-field">
+                        <label for="add-policy-policyno">Policy No *</label>
+                        <input type="text" id="add-policy-policyno" autocomplete="off" spellcheck="false" placeholder="9-digit policy number" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="add-policy-name">Name</label>
+                        <input type="text" id="add-policy-name" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="add-policy-doc">DOC</label>
+                        <input type="text" id="add-policy-doc" autocomplete="off" spellcheck="false" placeholder="DD/MM/YYYY" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="add-policy-mode">Mode</label>
+                        <input type="text" id="add-policy-mode" autocomplete="off" spellcheck="false" placeholder="MLY / QLY / HLY / YLY" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="add-policy-sumass">Sum Assured</label>
+                        <input type="text" id="add-policy-sumass" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="add-policy-plan">Plan</label>
+                        <input type="text" id="add-policy-plan" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="add-policy-premium">Premium</label>
+                        <input type="text" id="add-policy-premium" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="add-policy-mobileno">Mobile No</label>
+                        <input type="text" id="add-policy-mobileno" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="edit-field">
+                        <label for="add-policy-status">Status</label>
+                        <input type="text" id="add-policy-status" autocomplete="off" spellcheck="false" placeholder="e.g. AutoDebit" />
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button id="btn-add-policy-cancel" class="btn btn-secondary">Cancel</button>
+                    <button id="btn-add-policy-save" class="btn btn-primary">Add Policy</button>
                 </div>
             </div>
         </div>
