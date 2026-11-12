@@ -826,6 +826,24 @@ const App = (() => {
             if (e.key === 'Escape') clearSearch();
         });
 
+        // Click anywhere on the green search bar → focus input
+        const searchBox = document.querySelector('.search');
+        if (searchBox) {
+            searchBox.addEventListener('click', (e) => {
+                // Don't steal focus from the clear button
+                if (e.target.closest('.search-clear')) return;
+                searchInput.focus();
+            });
+        }
+
+        // Select-all on re-focus so typing replaces old search text
+        searchInput.addEventListener('focus', () => {
+            if (searchInput.value.length > 0) {
+                // Slight delay so the focus event completes first
+                requestAnimationFrame(() => searchInput.select());
+            }
+        });
+
         // Confirm modal buttons
         const overlay = $('#confirm-overlay');
         if (overlay) {

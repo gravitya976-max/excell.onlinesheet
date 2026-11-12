@@ -370,6 +370,7 @@ body {
     padding: 8px 16px;
     background: var(--bg-surface);
     transition: border-color var(--transition), box-shadow var(--transition);
+    cursor: text;
 }
 
 .search:focus-within {
@@ -411,14 +412,18 @@ body {
     background: none;
     border: none;
     color: var(--text-muted);
-    font-size: 18px;
+    font-size: 20px;
     cursor: pointer;
-    padding: 0 2px;
+    padding: 6px 8px;
+    margin: -6px -8px -6px 0;
     line-height: 1;
+    border-radius: 6px;
+    transition: color 0.15s, background 0.15s;
 }
 
 .search .search-clear:hover {
     color: var(--red);
+    background: rgba(239, 68, 68, 0.08);
 }
 
 /* Gateway group — matches action-btn style, border = status */
